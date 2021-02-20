@@ -6,7 +6,7 @@ script is usefull for engineers working with Adva FSP3000C products (CloudConnec
 
 Asyncio, REST-API based; can work with bunch of nodes simulteniosely.
 
-%%
+
 18:23:32 [korlatyanu@kcarbon ~]$ adva_rest.py -h                                         
 usage: adva_rest.py [-h] [-d DEVICE] [-dd DEVICES [DEVICES ...]] [-a]
                     [-i IFACE]
@@ -66,7 +66,7 @@ optional arguments:
                         pprint width when printing results
   -v, --verbose         be more verbose
   -vv, --debug          be even more verbose
-%%
+
 
 
 18:22:29 [korlatyanu@kcarbon ~]$ adva_rest.py -dd dwdm-vla1-4 dwdm-sas-1 -i /n -p opr snr
