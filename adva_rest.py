@@ -37,14 +37,17 @@ from collections import defaultdict
 import colorama
 import aiohttp
 
-import common_lib as cl
+try:
+    import common_libb as cl  # local lib. not accessible from public sources.
+except ImportError:
+    pass
 
 ENCODING = "utf-8"
 MULTITASK = False
 WIDTH = 180
-LOGIN = ""  # put login here
-PASSWORD = ""
-FTP_SERVER = "93.158.158.93"  # noc-sas
+LOGIN = "admin"  # put login here
+PASSWORD = ""  # put password here
+FTP_SERVER = "93.158.158.93"  # noc-sas. FTP to take SW from and to load DB and Diag to.
 FTP_PATH = "adva/"
 FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 
@@ -787,7 +790,7 @@ def prepare_devices(devices):
         # вероятно тут список локаций
         assert len(devices) == 2
         devices_out = []
-        rt_devices = cl.get_devices_from_rt("{ADVA F8} and not {в оффлайне}")
+        rt_devices = cl.get_devices_from_rt("({ADVA F8} or {Adva TF}) and not {в оффлайне}")
         logging.info("Got devices from RT: %s", pformat(rt_devices))
         for rt_device in rt_devices:
             if devices[0].lower() in rt_device:
@@ -987,7 +990,7 @@ def main():
         pprint(devices)
         MULTITASK = True
     elif args.all:
-        devices = cl.get_devices_from_rt("({ADVA F8} or {Adva TF})and not {в оффлайне}")  # get needed devices from inventory system
+        devices = cl.get_devices_from_rt("({ADVA F8} or {Adva TF}) and not {в оффлайне}")  # get needed devices from inventory system
         pprint(devices)
         MULTITASK = True
     if not results:
