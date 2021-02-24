@@ -1,10 +1,10 @@
 # adva_rest
 
-written by Anton Korlatyanu (korlatyanu@yandex.ru, korlatyanu@yandex-team.ru). Not a programer in anyway (not a true DWDM engineer as well =), so don't judge hard.
+written by Anton Korlatyanu (korlatyanu@yandex.ru, korlatyanu@yandex-team.ru). Not a programmer in anyway (not a true DWDM engineer as well =), so don't judge hard.
 
 script is usefull for engineers working with Adva FSP3000C products (CloudConnect).
 
-Asyncio, REST-API based; can work with bunch of nodes simulteniosely.
+Asyncio, REST-API based; can work with bunch of nodes simultaneously.
 
 ```
 18:23:32 [korlatyanu@kcarbon ~]$ adva_rest.py -h                                         
