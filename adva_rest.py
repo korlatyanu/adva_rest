@@ -23,19 +23,19 @@ adva_rest.py -a -c db_backup
 
 """
 
-import aiohttp
 import asyncio
-import json
 import argparse
 import logging
 import traceback
 import re
-import colorama
 
 from pprint import pprint, pformat
 from time import sleep
 from datetime import date
 from collections import defaultdict
+
+import colorama
+import aiohttp
 
 import common_lib as cl
 
@@ -49,7 +49,11 @@ FTP_PATH = "adva/"
 FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 
 
+# pylint: disable=global-statement, broad-except, too-many-branches, invalid-name, attribute-defined-outside-init, no-else-return
+# pylint: disable=too-many-lines, too-many-instance-attributes, too-many-arguments, no-self-use, too-many-locals, too-many-public-methods
+
 def read_args():
+    """Arguments declaration"""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-d", "--device", dest="device", help="device name, defaults to dwdm-sas-1 if no argument given")
     parser.add_argument("-dd", "--devices", dest="devices", nargs='+', help="bunch of devices")
@@ -87,14 +91,14 @@ def inhibit_exception(func):
     Если возникло исключение, мы должны завершить сессию в NE, иначе они могут накопиться, и новые сессии нельзябудет открыть.
     """
     def wrapped(*args, **kwargs):
-        logging.debug("wrapped insdide inhibit_exception got func %s " % func.__name__)
-        logging.debug("wrapped insdide inhibit_exception kwargs %s " % str(**kwargs))
+        logging.debug("wrapped insdide inhibit_exception got func %s ", func.__name__)
+        logging.debug("wrapped insdide inhibit_exception kwargs %s ", str(**kwargs))
         #for arg in args:
         #    pprint(dir(arg))
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            logging.error("Error %s while executing %s" % (e, func.__name__))
+            logging.error("Error %s while executing %s", e, func.__name__)
             traceback.print_exc()
             args[0].logout()  # в нулевом аргументе сам экземпляр класса.
             #self.logout()
@@ -102,16 +106,18 @@ def inhibit_exception(func):
 
 
 class AdvaGet():
+    """Class AdvaGet. Asyncio REST client to gather info from Adva DWDM boxes"""
     if LOGIN and PASSWORD:
         login, password = LOGIN, PASSWORD
     else:
         login, password = cl.read_creds("adva8")  # read credentials from external system
     devices_inv = {}  # тут будем хранить для каждого устройства установленные в него карты.
 
-    body = {"in": {
-        "un": login,
-        "pswd": password
-    }
+    body = {
+        "in": {
+            "un": login,
+            "pswd": password,
+            }
     }
     #common_header = {'Accept': 'application/json;ext=nn', 'Content-Type': 'application/json;ext=nn', 'AOS-API-Version': '1.0'}
     #
@@ -171,8 +177,8 @@ class AdvaGet():
         self.header = {'Accept': 'application/json;ext=nn', 'Content-Type': 'application/json;ext=nn', 'AOS-API-Version': '1.0'}
         self.cards = dict()
         #self.client_ports = defaultdict(list)
-        logging.debug("Body is: %s" % self.body)
-        logging.debug("AdvaGet class values: %s" % self.__dict__)
+        logging.debug("Body is: %s", self.body)
+        logging.debug("AdvaGet class values: %s", self.__dict__)
 
     @inhibit_exception
     async def get_inventory(self):
@@ -206,21 +212,14 @@ node 1 plug-slot 1/1/c2"""
         # print("PRINT JSON" + pformat(resp.json()))
         return tmp["result"]  # this returns a list
 
-    def get_inventory_file(self, filename=None):
-        """"takes inventory from file."""
-        if not filename:
-            filename = "/home/korlatyanu/working_dir/dwdm-sas-1_rest_inventory.txt"
-        with open(filename, "r", encoding=ENCODING) as f:
-            return json.load(f)["result"]
-
     @inhibit_exception
     async def fill_inventory(self, inv_json):
         """"takes json data with inventory, creates inventory entries in object
         inv_json returned from device query consists of a list of cards
         """
         # shelf is index 0. Cards have the same number as in chassis even if some are not intsalled. THIS is not true
-        logging.info("fill_inventory gets \n%s " % str(print_inv(inv_json)))
-        for i, v in enumerate(inv_json):
+        logging.info("fill_inventory gets \n%s ", str(print_inv(inv_json)))
+        for _, v in enumerate(inv_json):
             if "type" in v and v["type"] == "slot":
                 if not "name" in v:
                     # there is always each slot listed even if empty, skip those without names
@@ -230,13 +229,14 @@ node 1 plug-slot 1/1/c2"""
         return None
 
     def get_port_slot(self, iface):
+        """Parse iface name"""
         port_re = re.compile((r"""(?P<shelf>\d)/(?P<slot>[\d\w]+)/(?P<port>[\d\w]+)"""
                               r"""(/(?P<logic>[\w\d]+)(/(?P<sub_logic>[\w\d-]+))?)?"""))
         m = port_re.match(iface)
         if not m:
             logging.error("get_port_slot got improper iface!")
             return None, None, None
-        logging.info("get_port_slot matches %s " % pformat(m))
+        logging.info("get_port_slot matches %s ", pformat(m))
         return m["shelf"], m["slot"], m["port"]
 
     async def __aenter__(self):
@@ -249,11 +249,12 @@ node 1 plug-slot 1/1/c2"""
         await self.logout()
 
     async def open_session(self):
+        """open https session to NE"""
         logging.info("open_session started")
         self.session = aiohttp.ClientSession()
         resp = await self.session.post(self.url + self.uri["login"], json=self.body, headers=self.header, verify_ssl=False)
         logging.info("sent %s to %s", self.url + self.uri["login"], self.fqdn)
-        logging.info("sent %s" % self.body)
+        logging.info("sent %s", self.body)
         logging.info("got %s from %s", resp.status, self.fqdn)
         if resp.status != 200:
             logging.error("Failed to open session to %s, return code %s", self.fqdn, resp.status)
@@ -265,15 +266,17 @@ node 1 plug-slot 1/1/c2"""
             return True
 
     async def logout(self):
-        logging.info("Sending logout %s" %self.header)
+        """Logout from NE"""
+        logging.info("Sending logout %s", self.header)
         lout = await self.session.post(self.url + self.uri["logout"], verify_ssl=False, headers=self.header)
         await self.session.close()
-        logging.info("Logging out, status code %s" % lout.status)
-        logging.info("Logging out %s" % lout.headers)
+        logging.info("Logging out, status code %s", lout.status)
+        logging.info("Logging out %s", lout.headers)
 
     @inhibit_exception
     async def get_sysinfo(self):
-        status, dict_out = await self.query_uri(self.uri["sysinfo"])
+        """get NE sysinfo"""
+        _, dict_out = await self.query_uri(self.uri["sysinfo"])
         return dict_out
 
     @inhibit_exception
@@ -295,29 +298,32 @@ node 1 plug-slot 1/1/c2"""
 
     @inhibit_exception
     async def query_port_config(self, uri):
+        """this needs to be redone"""
         header = self.header
-        logging.info("query_port_config sending %s " % self.url + uri)
+        logging.info("query_port_config sending %s ", self.url + uri)
         resp = await self.session.get(self.url + uri, headers=header)
-        logging.debug("Raw data received from device: \n %s" % pformat(resp.json()))
+        logging.debug("Raw data received from device: \n %s", pformat(resp.json()))
         return resp.status
 
     @inhibit_exception
     async def query_uri(self, uri):
+        """General Get URI query"""
         header = self.header
         logging.info("query_uri sending %s %s", self.url + uri, pformat(header))
         resp = await self.session.get(self.url + uri, headers=header, verify_ssl=False)
         # pprint(resp.headers)
-        if resp.status >= 200 and resp.status <300:
+        if resp.status >= 200 and resp.status < 300:
             tmp = await resp.json()
         else:
             print(f"Failed to query uri '{uri}', status code {resp.status}")
             tmp = {}
-        logging.debug("Code received from device: \n %s" % pformat(resp.status))
-        logging.debug("Raw data received from device: \n %s" % pformat(tmp))
+        logging.debug("Code received from device: \n %s", pformat(resp.status))
+        logging.debug("Raw data received from device: \n %s", pformat(tmp))
         return resp.status, tmp
 
     @inhibit_exception
     async def post_uri(self, uri, body):
+        """General Post URI query"""
         header = self.header
         logging.info("sending %s %s", self.url + uri, pformat(header))
         resp = await self.session.post(self.url + uri, json=body, headers=header, verify_ssl=False)
@@ -343,14 +349,15 @@ node 1 plug-slot 1/1/c2"""
 
     @inhibit_exception
     async def query_col(self, uri, out_data):
-        code, data = await self.query_uri(uri)
+        """recursively query PMs from NE"""
+        _, data = await self.query_uri(uri)
         if not data:
             return out_data
         for item in data["result"]:
-            logging.debug("query_col collected: \n %s" % pformat(item["self"]))
+            logging.debug("query_col collected: \n %s", pformat(item["self"]))
             out_data[item["self"]] = item
         if "next" in data:
-            logging.debug("query_col next uri: \n %s" % pformat(data["next"]))
+            logging.debug("query_col next uri: \n %s", pformat(data["next"]))
             uri = data["next"]
             await self.query_col(uri, out_data)
         return out_data
@@ -373,11 +380,12 @@ node 1 plug-slot 1/1/c2"""
         #             'optm': 6.7},
         #  'self': '/mit/me/1/eqh/shelf,1/eqh/slot,4/eq/card/ptp/cl,1/optm/pm/crnt/m15,Power',
         #  'sts': 'prtl'},
-        keys_of_interest = (#"bintv",
-                            "pmdata",
-                            #"self",
-                            #"dnm",
-                            )
+        keys_of_interest = (
+            #"bintv",
+            "pmdata",
+            #"self",
+            #"dnm",
+            )
         not_interesting_keys = (
             "Receiver",
             "RxQFnw100g",
@@ -393,13 +401,13 @@ node 1 plug-slot 1/1/c2"""
             "cem",
             "ecm-",
         )
-        logging.debug("parse_col issued with PMtype %s, PMperiod %s: \n " % (self.pmtype, self.pmperiod))
+        logging.debug("parse_col issued with PMtype %s, PMperiod %s: \n ", self.pmtype, self.pmperiod)
         for key, data_ in data.items():
             port, port_logical, pmperiod, pmtype = convert_entity(key)
-            if self.pmperiod and not self.pmperiod in key and not "all" in self.pmperiod:
+            if self.pmperiod and not self.pmperiod in key and "all" not in self.pmperiod:
                 logging.debug("dropped %s due pmperiod", port)
                 continue
-            if self.pmtype and not any(pm in key for pm in self.pmtype) and not "all" in self.pmtype:
+            if self.pmtype and not any(pm in key for pm in self.pmtype) and "all" not in self.pmtype:
                 logging.debug("dropped %s %s due pmtype", port, key)
                 continue
             if self.iface and not self.iface in port:
@@ -425,18 +433,18 @@ node 1 plug-slot 1/1/c2"""
                         pmtype = merge_pm
                 for end_pmtype, end_value in data_value.items():
                     #print(self.pmtype_exact, end_pmtype)
-                    if self.pmtype_exact and not end_pmtype in self.pmtype_exact:
+                    if self.pmtype_exact and end_pmtype not in self.pmtype_exact:
                         logging.info("dropped %s %s due exact PM not match", end_pmtype, end_value)
                         continue
-                    if not port in dict_out:
+                    if port not in dict_out:
                         dict_out[port] = {}
-                    if not port_logical in dict_out[port].keys():
+                    if port_logical not in dict_out[port].keys():
                         dict_out[port][port_logical] = {}
-                    if not pmtype in dict_out[port][port_logical].keys():
+                    if pmtype not in dict_out[port][port_logical].keys():
                         dict_out[port][port_logical][pmtype] = {}
-                    if not pmperiod in dict_out[port][port_logical][pmtype].keys():
+                    if pmperiod not in dict_out[port][port_logical][pmtype].keys():
                         dict_out[port][port_logical][pmtype][pmperiod] = {}
-                    if not end_pmtype in dict_out[port][port_logical][pmtype][pmperiod].keys():
+                    if end_pmtype not in dict_out[port][port_logical][pmtype][pmperiod].keys():
                         dict_out[port][port_logical][pmtype][pmperiod][end_pmtype] = {}
                     # dict_out[port][port_logical][pmtype][pmperiod].update({data_key: data_value})
                     dict_out[port][port_logical][pmtype][pmperiod][end_pmtype] = end_value  # we basically keep only pmdata
@@ -447,7 +455,7 @@ node 1 plug-slot 1/1/c2"""
         """Func to return current pkgs in staging"""
         _, tmp = await self.query_uri(self.uri["sw_ecm_staging"])
         tmp2 = trim_dict(tmp, ["name"])
-        if not "result" in tmp2:
+        if "result" not in tmp2:
             return ""
         pkg_present = [pkg["name"] for pkg in tmp2["result"]]
         self.print("Currently ECM staging contains:")
@@ -506,23 +514,22 @@ node 1 plug-slot 1/1/c2"""
     async def sw_load_pkg(self, version, pkg):
         """"download the pkg file"""
         path = FTP_SW_PATH + f"{version}/"
-        ip = FTP_SERVER
         body = {
-                "in": {
-                    "name": path + pkg,
-                    "ftpinfo": {
-                        "prot": "ftp",
-                        "srvtype": "ipAddress",
-                        "srvipaddr": ip,
-                        "srvuid": "anonymous",
-                        "srvpasswd": "blah"
-                    }
+            "in": {
+                "name": path + pkg,
+                "ftpinfo": {
+                    "prot": "ftp",
+                    "srvtype": "ipAddress",
+                    "srvipaddr": FTP_SERVER,
+                    "srvuid": "anonymous",
+                    "srvpasswd": "blah"
                 }
+            }
         }
         code, headers, resp = await self.post_uri(self.uri["sw_load"], body)
-        logging.info("returned %s:\n%s\n\n%s" % (code, pformat(headers), pformat(resp)))
+        logging.info("returned %s:\n%s\n\n%s", code, pformat(headers), pformat(resp))
         if code != 202:
-            self.print("Failed to copy %s cause %s" % (pkg, code), type="error")
+            self.print("Failed to copy %s cause %s", pkg, code, msg_type="error")
             return 1
         job = headers["Location"] + "/ajob"
         await self.poll_ajob(job, "copy %s" % pkg)
@@ -535,10 +542,10 @@ node 1 plug-slot 1/1/c2"""
             self.print(tmp["descr"])
             self.print((tmp["st"], "waiting..."))
             if tmp["st"] == "fin":
-                self.print("finished %s at %s" % (name, self.fqdn), type="finished")
+                self.print("finished %s at %s" % (name, self.fqdn), msg_type="finished")
                 return True
             if tmp["st"] == "fail":
-                self.print("failed to perform %s at %s" % (name, self.fqdn), type="error")
+                self.print("failed to perform %s at %s" % (name, self.fqdn), msg_type="error")
                 return False
             sleep(10)
 
@@ -557,25 +564,22 @@ node 1 plug-slot 1/1/c2"""
             }
         }
         code, headers, resp = await self.post_uri(self.uri["sw_del"], body)
-        logging.info("returned %s:\n%s\n\n%s" % (code, pformat(headers), pformat(resp)))
+        logging.info("returned %s:\n%s\n\n%s", code, pformat(headers), pformat(resp))
         if code != 200:
-            self.print("Failed to delete %s cause %s" % (pkg, code), type="error")
+            self.print("Failed to delete cause %s", code, msg_type="error")
         else:
-            self.print("succesfully deleted pkgs", type="finished")
+            self.print("succesfully deleted pkgs", msg_type="finished")
 
     @inhibit_exception
     async def gen_diag(self):
         """generate diag file"""
         body = {"in": {}}
-        code, headers, resp = await self.post_uri(self.uri["diag"], body)
+        code, headers, _ = await self.post_uri(self.uri["diag"], body)
         if code != 202:
-            self.print("Failed to generate diag for %s %s" % (self.fqdn, code), type="error")
+            self.print("Failed to generate diag for %s %s" % (self.fqdn, code), msg_type="error")
             return False
         job = headers["Location"] + "/ajob"
-        if await self.poll_ajob(job, "generate diag"):
-            return True
-        else:
-            return False
+        return bool(await self.poll_ajob(job, "generate diag"))
 
     @inhibit_exception
     async def copy_diag(self,
@@ -599,13 +603,13 @@ node 1 plug-slot 1/1/c2"""
                 }
             }
         }
-        code, headers, resp = await self.post_uri(self.uri["cpdiag"], body)
+        code, headers, _ = await self.post_uri(self.uri["cpdiag"], body)
         if code != 202:
-            self.print("Failed to copy diag for %s %s" % (self.fqdn, code), type="error")
+            self.print("Failed to copy diag for %s %s" % (self.fqdn, code), msg_type="error")
             return False
         job = headers["Location"] + "/ajob"
         if await self.poll_ajob(job, "copy diag to remote"):
-            self.print("Diag file saved to %s %s" % (srvipaddr, "/tftpboot/" + file), type="finished")
+            self.print("Diag file saved to %s %s" % (srvipaddr, "/tftpboot/" + file), msg_type="finished")
         else:
             return False
 
@@ -613,23 +617,22 @@ node 1 plug-slot 1/1/c2"""
     async def db_backup(self):
         """backup the DB"""
         body = {"in": {"fmt": "binary"}}
-        code, headers, resp = await self.post_uri(self.uri["db_backup"], body)
+        code, headers, _ = await self.post_uri(self.uri["db_backup"], body)
         if code != 202:
-            self.print("Failed to backup DB %s" % code, type="error")
+            self.print("Failed to backup DB %s" % code, msg_type="error")
             return False
         job = headers["Location"] + "/ajob"
-        if await self.poll_ajob(job, "backup DB"):
-            return True
-        else:
-            return False
+        return bool(await self.poll_ajob(job, "backup DB"))
 
     @inhibit_exception
-    async def db_load(self,
-                    prot="ftp",
-                    srvtype="ipAddress",
-                    srvipaddr=FTP_SERVER,
-                    srvuid="anonymous",
-                    srvpasswd="blah"):
+    async def db_load(
+            self,
+            prot="ftp",
+            srvtype="ipAddress",
+            srvipaddr=FTP_SERVER,
+            srvuid="anonymous",
+            srvpasswd="blah"
+        ):
         """copy DB data to server, noc-sas by default"""
         today = date.today()
         file = FTP_PATH + "sw_backup/f8/"+ f"{self.fqdn}_{today.strftime('%Y%m%d')}.db"
@@ -645,13 +648,13 @@ node 1 plug-slot 1/1/c2"""
                 }
             }
         }
-        code, headers, resp = await self.post_uri(self.uri["db_load"], body)
+        code, headers, _ = await self.post_uri(self.uri["db_load"], body)
         if code != 202:
-            self.print("Failed to upload DB for %s %s" % (self.fqdn, code), type="error")
+            self.print("Failed to upload DB for %s %s", self.fqdn, code, msg_type="error")
             return False
         job = headers["Location"] + "/ajob"
         if await self.poll_ajob(job, "copy DB to remote"):
-            self.print("DB file saved to %s %s" % (srvipaddr, "/tftpboot/" + file), type="finished")
+            self.print("DB file saved to %s %s" % (srvipaddr, "/tftpboot/" + file), msg_type="finished")
 
     def pick_pms(self, data):
         """
@@ -682,20 +685,20 @@ node 1 plug-slot 1/1/c2"""
         for entry in data:
             if entry["bintv"] == self.pmperiod:
                 for pm, pmv in entry["pmdata"].items():
-                    logging.debug("pick_pms is cycling %s " % pm)
+                    logging.debug("pick_pms is cycling %s ", pm)
                     if any(pm.startswith(pm_of_interest) for pm_of_interest in pms_of_interest):
                         dict_out[pm] = pmv
         return dict_out
 
-    def print(self, *argv, type="regular"):
+    def print(self, *argv, msg_type="regular"):
         """"print with device name"""
         if isinstance(*argv, str):
             string = argv[0].strip()
         else:
             string = " ".join(*argv)
-        if type == "error":
+        if msg_type == "error":
             color = colorama.Fore.RED
-        elif type == "finished":
+        elif msg_type == "finished":
             color = colorama.Fore.GREEN
         else:
             color = colorama.Fore.WHITE
@@ -705,6 +708,7 @@ node 1 plug-slot 1/1/c2"""
 
 
 def print_inv(_list):
+    """prints inventory"""
     out = ""
     for i, v in enumerate(_list):
         out += "%s -> %s" % (i, v["fnm"])
@@ -729,9 +733,9 @@ def trim_dict(_dict, keys_of_interest=None, skip_keys=()):
     for k, v in _dict.items():
         if k in skip_keys:
             continue
-        logging.debug("trim_dict Iterating over %s" % k)
+        logging.debug("trim_dict Iterating over %s", k)
         if isinstance(v, dict):
-            logging.debug("trim_dict Iterating over %s" % k)
+            logging.debug("trim_dict Iterating over %s", k)
             tmp = trim_dict(v, keys_of_interest, skip_keys)
             if tmp:
                 dict_out[k] = tmp
@@ -757,13 +761,15 @@ def trim_dict(_dict, keys_of_interest=None, skip_keys=()):
 
 
 def url_construct(device):
+    """"repare URL from hostname"""
     return f"https://{device}.yndx.net"
 
 
 def prepare_device(device):
-    if device == None:
+    """prepare device name (append 'dwdm-' if needed)"""
+    if device is None:
         device = "dwdm-adva-test"
-    if not "dwdm" in device:
+    if "dwdm" not in device:
         device = f"dwdm-{device}"
     return device
 
@@ -782,7 +788,7 @@ def prepare_devices(devices):
         assert len(devices) == 2
         devices_out = []
         rt_devices = cl.get_devices_from_rt("{ADVA F8} and not {в оффлайне}")
-        logging.info("Got devices from RT: %s" % pformat(rt_devices))
+        logging.info("Got devices from RT: %s", pformat(rt_devices))
         for rt_device in rt_devices:
             if devices[0].lower() in rt_device:
                 if devices[1].lower() in rt_device:
@@ -791,6 +797,7 @@ def prepare_devices(devices):
 
 
 def convert_entity(str_):
+    """given entyty from Adva NE convert it to meaninngfull data"""
     port = ""
     port_logic = "phy"
     # example_data: r"""/mit/me/1/eqh/shelf,1/eqh/slot,5/eq/card/ptp/cl,1/ctp/et100/mac/pm/crnt/m15,MacNIrx"""
@@ -825,7 +832,8 @@ def convert_entity(str_):
 
 
 def prepare_pms_arg(pmtype, pmperiod, hist_cur):
-    logging.debug("pmargs: %s %s" % (pmtype, pmperiod))
+    """prepare PM type, period in a way readable by AdvaGet"""
+    logging.debug("pmargs: %s %s", pmtype, pmperiod)
     pmt = []   # should be fixed (FEC, PCSrx, ...)
     pmt_exact = []  # can be anything
     pmfamily = []
@@ -861,26 +869,28 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
         pmp = "m15"
     elif pmperiod.lower() in ["24h", "24hour", "1d", "1day", "day"]:
         pmp = "day"
-    logging.info("prepare_pms_arg returns type: %s; exact_type: %s; period: %s; hist/cur: %s" % (pmt, pmt_exact, pmp, hc))
+    logging.info("prepare_pms_arg returns type: %s; exact_type: %s; period: %s; hist/cur: %s", pmt, pmt_exact, pmp, hc)
     return pmt, pmt_exact, pmfamily, pmp, hc
 
 
 async def get_data(device, args):
+    """AdvaGet entry point"""
     res_data = {}
     url = url_construct(device)
     pmtype, pmtype_exact, pmfamily, pmperiod, hist_cur = prepare_pms_arg(args.pmtype, args.pmperiod, args.hist_cur)
     if not pmfamily:
         pmfamily = args.pmfamily
-    async with AdvaGet(device,
-                 url,
-                 args.cmd,
-                 pmtype=pmtype,
-                 pmtype_exact=pmtype_exact,
-                 pmperiod=pmperiod,
-                 pmfamily=pmfamily,
-                 hist_cur=hist_cur, step=args.step, step_delta=args.step_delta,
-                 iface_filter=args.iface,
-                 ) as adva_dev:
+    async with AdvaGet(
+            device,
+            url,
+            args.cmd,
+            pmtype=pmtype,
+            pmtype_exact=pmtype_exact,
+            pmperiod=pmperiod,
+            pmfamily=pmfamily,
+            hist_cur=hist_cur, step=args.step, step_delta=args.step_delta,
+            iface_filter=args.iface,
+    ) as adva_dev:
         # adva_dev = AdvaGet(device,
         #                    url,
         #                    args.cmd,
@@ -954,6 +964,7 @@ async def get_data(device, args):
 
 
 def main():
+    """script entry point"""
     args = read_args()
     global MULTITASK
     global WIDTH
@@ -980,7 +991,7 @@ def main():
         pprint(devices)
         MULTITASK = True
     if not results:
-        logging.info("Will gather data from devices: %s" % pformat(devices))
+        logging.info("Will gather data from devices: %s", pformat(devices))
         tasks = []
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -994,7 +1005,7 @@ def main():
         loop.close()
     for device, res in results.items():
         if not res:
-            logging.info("Device %s returns None" % device)
+            logging.info("Device %s returns None", device)
             continue
         print(f"*** {device} ***")
         pprint(res, width=WIDTH)
