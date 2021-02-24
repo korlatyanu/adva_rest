@@ -70,7 +70,7 @@ optional arguments:
 
 Get SNR values from all cards from nodes dwdm-vla1-4, dwdm-sas-1:
 ```
-18:22:29 [korlatyanu@kcarbon ~]$ adva_rest.py -dd dwdm-vla1-4 dwdm-sas-1 -i /n -p opr snr
+18:22:29 [korlatyanu@kcarbon ~]$ adva_rest.py -dd dwdm-vla1-4 dwdm-sas-1 -i /n -p snr
 ['dwdm-vla1-4', 'dwdm-sas-1']
 *** dwdm-vla1-4 ***
 {'1/1/n1': {'ot200/och': {'Impairments': {'nint': {'dgd': 13, 'snr': 17.5}}}},
