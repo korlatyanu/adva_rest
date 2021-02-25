@@ -38,7 +38,7 @@ import colorama
 import aiohttp
 
 try:
-    import common_libb as cl  # local lib. not accessible from public sources.
+    import common_lib as cl  # local lib. not accessible from public sources.
 except ImportError:
     pass
 
