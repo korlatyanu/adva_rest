@@ -28,6 +28,7 @@ import argparse
 import logging
 import traceback
 import re
+import os
 
 from pprint import pprint, pformat
 from time import sleep
@@ -113,7 +114,11 @@ class AdvaGet():
     if LOGIN and PASSWORD:
         login, password = LOGIN, PASSWORD
     else:
-        login, password = cl.read_creds("adva8")  # read credentials from external system
+        try:
+            login, password = cl.read_creds("adva8")  # read credentials from external system
+        except NameError:
+            login = LOGIN
+            password = os.environ.get("DWDM_PASSW")
     devices_inv = {}  # тут будем хранить для каждого устройства установленные в него карты.
 
     body = {
