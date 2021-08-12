@@ -29,6 +29,7 @@ import logging
 import traceback
 import re
 import os
+import json
 
 from pprint import pprint, pformat
 from time import sleep
@@ -47,7 +48,7 @@ ENCODING = "utf-8"
 MULTITASK = False
 WIDTH = 180
 LOGIN = "admin"  # put login here
-PASSWORD = ""  # put password here
+PASSWORD = ""  # put password here. Can be put in environments, 'DWDM_PASSW'
 FTP_SERVER = "93.158.158.93"  # noc-sas. FTP to take SW from and to load DB and Diag to.
 FTP_PATH = "adva/"
 FTP_SW_PATH = FTP_PATH + "Soft/F8_"
@@ -55,6 +56,7 @@ FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 
 # pylint: disable=global-statement, broad-except, too-many-branches, invalid-name, attribute-defined-outside-init, no-else-return
 # pylint: disable=too-many-lines, too-many-instance-attributes, too-many-arguments, no-self-use, too-many-locals, too-many-public-methods
+# pylint: disable=no-value-for-parameter
 
 def read_args():
     """Arguments declaration"""
@@ -317,14 +319,21 @@ node 1 plug-slot 1/1/c2"""
     async def query_uri(self, uri):
         """General Get URI query"""
         header = self.header
+        tmp = {}
         logging.info("query_uri sending %s %s", self.url + uri, pformat(header))
         resp = await self.session.get(self.url + uri, headers=header, verify_ssl=False)
         # pprint(resp.headers)
         if resp.status >= 200 and resp.status < 300:
-            tmp = await resp.json()
+            try:
+                tmp = await resp.json()
+            except json.decoder.JSONDecodeError:
+                logging.error("JSONDecodeError happened")
+                # Error happens for string like this: '"fecberm": -1e-18.0' due float after e
+                txt = await resp.text()
+                txt = re.sub(r"(e-\d+)\.0+", r"\1", txt)
+                tmp = json.loads(txt)
         else:
             print(f"Failed to query uri '{uri}', status code {resp.status}")
-            tmp = {}
         logging.debug("Code received from device: \n %s", pformat(resp.status))
         logging.debug("Raw data received from device: \n %s", pformat(tmp))
         return resp.status, tmp
@@ -400,7 +409,7 @@ node 1 plug-slot 1/1/c2"""
             "RxQFnw200g"
         )
         merge_pmtype = {  # some PMtypess use different naming for different PMperiods
-            "Impairments": ["Impairments", "ImpQFnw200g", "ImpQFnw100g"],
+            "Impairments": ["Impairments", "ImpQFnw200g", "ImpQFnw100g",],
             "Power": ["IFQFnw", "Power", "IFAM20nw", "IF112gSR4", "IFunknown"],
         }
         not_interesting_ports = (
@@ -537,7 +546,7 @@ node 1 plug-slot 1/1/c2"""
         code, headers, resp = await self.post_uri(self.uri["sw_load"], body)
         logging.info("returned %s:\n%s\n\n%s", code, pformat(headers), pformat(resp))
         if code != 202:
-            self.print("Failed to copy %s cause %s", pkg, code, msg_type="error")
+            self.print("Failed to copy %s cause %s" % (pkg, code), msg_type="error")
             return 1
         job = headers["Location"] + "/ajob"
         await self.poll_ajob(job, "copy %s" % pkg)
@@ -574,7 +583,7 @@ node 1 plug-slot 1/1/c2"""
         code, headers, resp = await self.post_uri(self.uri["sw_del"], body)
         logging.info("returned %s:\n%s\n\n%s", code, pformat(headers), pformat(resp))
         if code != 200:
-            self.print("Failed to delete cause %s", code, msg_type="error")
+            self.print("Failed to delete cause %s" %code, msg_type="error")
         else:
             self.print("succesfully deleted pkgs", msg_type="finished")
 
@@ -658,7 +667,7 @@ node 1 plug-slot 1/1/c2"""
         }
         code, headers, _ = await self.post_uri(self.uri["db_load"], body)
         if code != 202:
-            self.print("Failed to upload DB for %s %s", self.fqdn, code, msg_type="error")
+            self.print("Failed to upload DB for %s %s" % (self.fqdn, code), msg_type="error")
             return False
         job = headers["Location"] + "/ajob"
         if await self.poll_ajob(job, "copy DB to remote"):
@@ -698,6 +707,7 @@ node 1 plug-slot 1/1/c2"""
                         dict_out[pm] = pmv
         return dict_out
 
+    #@inhibit_exception
     def print(self, *argv, msg_type="regular"):
         """"print with device name"""
         if isinstance(*argv, str):
@@ -852,14 +862,28 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
     elif any(p.lower() in ["fec", "ber-fec"] for p in pmtype):
         pmt = ["fec", "FEC"]
     elif any(p.lower() in ["snr", "osnr"] for p in pmtype):
-        pmt = ["OSNR", "snr", "Impairments", "ImpQFnw200g", "ImpQFnw100g", "QualityMod", "QualityTF600g32h64Q"]
+        pmt = ["OSNR",
+               "snr",
+               "Impairments",
+               "ImpQFnw200g",
+               "ImpQFnw100g",
+               "QualityMod",
+               "QualityTF600g32h64Q",
+               "QualityTF200g16Q",
+               "QualityTF400g16Q",
+               ]
     elif any(p.lower() in ["opr", "power"] for p in pmtype):
         # pmt = ["opr", "Power", "IFunknown", ]
         pmt = ["opr", "IFQFnw", "IFTFnw", "Power", "IFAM20nw", "IFAM23Lnw", "IFAM23Lcl", "IF112gSR4", "IF112gLR4", "IFunknown"]
     elif any(p.lower() in ["err", "errors"] for p in pmtype):
         pmt = ["err", "NearEnd", "PCSrx", "PCStx", "MacNIrx", "MacNItx"]
     elif any(p.lower() in ["qf", "quality", "qfq"] for p in pmtype):
-        pmt = ["qf", "RxQuality", "RxQFnw200g", "RxQFnw100g"]
+        pmt = ["qf",
+               "RxQuality",
+               "RxQFnw200g",
+               "RxQFnw100g",
+               "QualityTF",
+               ]
     else:
         pmt = ("all",)
         if any(pm.islower() for pm in pmtype):
