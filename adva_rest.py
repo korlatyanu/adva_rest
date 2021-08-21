@@ -65,6 +65,7 @@ def read_args():
     parser.add_argument("-dd", "--devices", dest="devices", nargs='+', help="bunch of devices")
     parser.add_argument("-a", "--all", dest="all", action="store_true",
                         help="run on all devices (taken from RT with filter '{Adva F8} and not {в оффлайн}'")
+    parser.add_argument("-r", "--read", dest="devices_file", help="read devices from file")
     parser.add_argument("-i", "--interface", dest="iface", help="by default only check 'line' ifaces. 'all' for clients")
     parser.add_argument("-c", "--command", dest="cmd",
                         choices=("diag",
@@ -1007,6 +1008,15 @@ async def get_data(device, args):
     #     traceback.print_tb(err.__traceback__)
 
 
+def get_devices_from_file(_file):
+    devices = []
+    with open(_file) as file:
+        for line in file:
+            if not line.strip():
+                continue
+            devices.append(line.strip())
+    return devices
+
 
 def main():
     """script entry point"""
@@ -1029,6 +1039,10 @@ def main():
         results[device] = data
     elif args.devices:
         devices = prepare_devices(args.devices)
+        pprint(devices)
+        MULTITASK = True
+    elif args.devices_file:
+        devices = get_devices_from_file(args.devices_file)
         pprint(devices)
         MULTITASK = True
     elif args.all:
