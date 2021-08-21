@@ -505,6 +505,7 @@ node 1 plug-slot 1/1/c2"""
             f"f8-ecm-3-{version}-hi-ppc-64bit.tar.gz.pak",
             f"f8-ecm-2-{version}-hi-ppc-64bit.tar.gz.pak",
             f"f8-mp-2b4ct-base-{version}-arm7-32bit.bz2.pak",
+            f"f8-os-oppm-f-base-{version}-arm7-32bit.bz2.pak",  # supported since 3.2.1
             # TF
             f"f8-cc-3-{version}-hi-arm7-32bit.tar.gz.pak",
             f"f8-t-mp-2d12ct-base-{version}-arm7-32bit.bz2.pak",
@@ -518,6 +519,7 @@ node 1 plug-slot 1/1/c2"""
         if any("T-CEM-2" in card for card in self.cards.values()):
             pkgs_needed.append(f"f8-cem-2-{version}-hi-arm7-32bit.tar.pak")
         pkgs_needed.append(f"f8-cc-3-{version}-hi-arm7-32bit.tar.gz.pak")  # all need CC
+        pkgs_needed.append(f"f8-os-oppm-f-base-{version}-arm7-32bit.bz2.pak")  # TMP to launch FIN TODO remove
         self.print("\nPackages needed:")
         pprint(pkgs_needed)
         for pkg in pkgs_needed:
@@ -829,8 +831,8 @@ def convert_entity(str_):
 
     m = re.search((r"^.+/shelf,(?P<shelf>\d+)/.*"
                    r"slot,(?P<slot>\d+)/.*(?P<port_type>cl|nw),"
-                   r"(?P<port>\d+)(?:/.*(?P<port_logic>ot\d00|et100))?.*?"
-                   r"(?P<layer>odu4-\d|odu4|otu4|otsia|otuc\dpa|och|optm|opt|mac|ety6)"
+                   r"(?P<port>\d+)(?:/.*(?P<port_logic>ot\d00|et100|ots|oms))?.*?"
+                   r"(?P<layer>odu4-\d|odu4|otu4|otsia|otuc\dpa|och|optm|opt|mac|ety6|ots|oms)"
                    r"(?:(/(?P<sublayer>optl))?(?:/(?P<lane>\d+)?))?.*"
                    r"(?P<pmperiod>nint|m15|day),(?P<pmtype>.+)$"
                    ), str_)  # https://regex101.com/r/FdWqmN/1/
@@ -874,7 +876,18 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
                ]
     elif any(p.lower() in ["opr", "power"] for p in pmtype):
         # pmt = ["opr", "Power", "IFunknown", ]
-        pmt = ["opr", "IFQFnw", "IFTFnw", "Power", "IFAM20nw", "IFAM23Lnw", "IFAM23Lcl", "IF112gSR4", "IF112gLR4", "IFunknown"]
+        pmt = ["opr",
+               "IFQFnw",
+               "IFTFnw",
+               "Power",
+               "IFAM20nw",
+               "IFAM23Lnw",
+               "IFAM23Lcl",
+               "IF112gSR4",
+               "IF112gLR4",
+               "IFunknown",
+               "OSC",
+               ]
     elif any(p.lower() in ["err", "errors"] for p in pmtype):
         pmt = ["err", "NearEnd", "PCSrx", "PCStx", "MacNIrx", "MacNItx"]
     elif any(p.lower() in ["qf", "quality", "qfq"] for p in pmtype):
