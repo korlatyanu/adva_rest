@@ -58,6 +58,7 @@ FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 # pylint: disable=too-many-lines, too-many-instance-attributes, too-many-arguments, no-self-use, too-many-locals, too-many-public-methods
 # pylint: disable=no-value-for-parameter
 
+
 def read_args():
     """Arguments declaration"""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -411,7 +412,7 @@ node 1 plug-slot 1/1/c2"""
         )
         merge_pmtype = {  # some PMtypess use different naming for different PMperiods
             "Impairments": ["Impairments", "ImpQFnw200g", "ImpQFnw100g",],
-            "Power": ["IFQFnw", "Power", "IFAM20nw", "IF112gSR4", "IFunknown"],
+            "Power": ["IFQFnw", "Power", "IFAM20nw", "IF112gSR4", "IFunknown", "PwrNwOPPM", "PwrClOPPM",],
         }
         not_interesting_ports = (
             "psm-",
@@ -420,6 +421,8 @@ node 1 plug-slot 1/1/c2"""
             "ecm-",
         )
         logging.debug("parse_col issued with PMtype %s, PMperiod %s: \n ", self.pmtype, self.pmperiod)
+        # sometimes it's usefull to check what device gives in REST:
+        # adva_rest.py -d dwdm-man-kiv-e -vv 2>&1 | i "'self': '/mit/me/"
         for key, data_ in data.items():
             port, port_logical, pmperiod, pmtype = convert_entity(key)
             if self.pmperiod and not self.pmperiod in key and "all" not in self.pmperiod:
@@ -832,8 +835,8 @@ def convert_entity(str_):
 
     m = re.search((r"^.+/shelf,(?P<shelf>\d+)/.*"
                    r"slot,(?P<slot>\d+)/.*(?P<port_type>cl|nw),"
-                   r"(?P<port>\d+)(?:/.*(?P<port_logic>ot\d00|et100|ots|oms))?.*?"
-                   r"(?P<layer>odu4-\d|odu4|otu4|otsia|otuc\dpa|och|optm|opt|mac|ety6|ots|oms)"
+                   r"(?P<port>\d*[-,\w]*)(?:/.*(?P<port_logic>ot\d00|et100|ots|oms))?.*?"
+                   r"(?P<layer>odu4-\d|odu4|otu4|otsia|otuc\dpa|och|optm|opt|mac|ety6|ots|oms|traffic)"
                    r"(?:(/(?P<sublayer>optl))?(?:/(?P<lane>\d+)?))?.*"
                    r"(?P<pmperiod>nint|m15|day),(?P<pmtype>.+)$"
                    ), str_)  # https://regex101.com/r/FdWqmN/1/
@@ -881,6 +884,8 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
                "IFQFnw",
                "IFTFnw",
                "Power",
+               "PwrNwOPPM",
+               "PwrClOPPM",
                "IFAM20nw",
                "IFAM23Lnw",
                "IFAM23Lcl",
@@ -890,7 +895,7 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
                "OSC",
                ]
     elif any(p.lower() in ["err", "errors"] for p in pmtype):
-        pmt = ["err", "NearEnd", "PCSrx", "PCStx", "MacNIrx", "MacNItx"]
+        pmt = ["err", "NearEnd", "PCSrx", "PCStx", "MacNIrx", "MacNItx",]
     elif any(p.lower() in ["qf", "quality", "qfq"] for p in pmtype):
         pmt = ["qf",
                "RxQuality",
@@ -906,7 +911,12 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
         else:
             pmfamily = pmtype
     if not pmperiod:
-        pmp = "nint"
+        if "err" in pmt:
+            # err PMs are present only in m15, day period
+            pmp = "all"
+        else:
+            # other PMs we probably want current value
+            pmp = "nint"
     elif pmperiod == "all":
         pmp = "all"
     elif pmperiod.lower() in ["nint", "now"]:
@@ -1009,10 +1019,11 @@ async def get_data(device, args):
 
 
 def get_devices_from_file(_file):
+    """read device list from file"""
     devices = []
     with open(_file) as file:
         for line in file:
-            if not line.strip():
+            if not line.strip() or line.startswith("#"):
                 continue
             devices.append(line.strip())
     return devices
@@ -1052,6 +1063,7 @@ def main():
     if not results:
         logging.info("Will gather data from devices: %s", pformat(devices))
         tasks = []
+        res = ""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         for device in devices:
