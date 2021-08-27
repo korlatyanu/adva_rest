@@ -49,7 +49,7 @@ MULTITASK = False
 WIDTH = 180
 LOGIN = "admin"  # put login here
 PASSWORD = ""  # put password here. Can be put in environments, 'DWDM_PASSW'
-FTP_SERVER = "93.158.158.93"  # noc-sas. FTP to take SW from and to load DB and Diag to.
+FTP_SERVER = ""  # FTP to take SW from and to load DB and Diag to. ip addr.
 FTP_PATH = "adva/"
 FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 
@@ -57,6 +57,10 @@ FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 # pylint: disable=global-statement, broad-except, too-many-branches, invalid-name, attribute-defined-outside-init, no-else-return
 # pylint: disable=too-many-lines, too-many-instance-attributes, too-many-arguments, no-self-use, too-many-locals, too-many-public-methods
 # pylint: disable=no-value-for-parameter
+
+
+if not FTP_SERVER:
+    FTP_SERVER = cl.FTP_SERVER
 
 
 def read_args():
