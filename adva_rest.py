@@ -412,7 +412,17 @@ node 1 plug-slot 1/1/c2"""
         )
         merge_pmtype = {  # some PMtypess use different naming for different PMperiods
             "Impairments": ["Impairments", "ImpQFnw200g", "ImpQFnw100g",],
-            "Power": ["IFQFnw", "Power", "IFAM20nw", "IF112gSR4", "IFunknown", "PwrNwOPPM", "PwrClOPPM",],
+            "Power": ["IFQFnw",
+                      "Power",
+                      "IFAM20nw",
+                      "IF112gSR4",
+                      "IFunknown",
+                      "PwrNwOPPM",
+                      "PwrClOPPM",
+                      "IFAM23Lnw",
+                      "IFAM23Hnw",
+                      "IFAM23Hcl",
+                      ],
         }
         not_interesting_ports = (
             "psm-",
@@ -889,10 +899,14 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
                "IFAM20nw",
                "IFAM23Lnw",
                "IFAM23Lcl",
+               "IFAM23Hcl",
                "IF112gSR4",
                "IF112gLR4",
                "IFunknown",
                "OSC",
+               "IFAM23Hnw",
+               "IFAM23Hnw",
+               "IFAM23Lvar1nw",
                ]
     elif any(p.lower() in ["err", "errors"] for p in pmtype):
         pmt = ["err", "NearEnd", "PCSrx", "PCStx", "MacNIrx", "MacNItx",]
