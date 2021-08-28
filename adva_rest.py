@@ -60,7 +60,8 @@ FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 
 
 if not FTP_SERVER:
-    FTP_SERVER = cl.FTP_SERVER
+    if "cl" in locals():
+        FTP_SERVER = cl.FTP_SERVER
 
 
 def read_args():
