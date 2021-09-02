@@ -52,6 +52,10 @@ PASSWORD = ""  # put password here. Can be put in environments, 'DWDM_PASSW'
 FTP_SERVER = ""  # FTP to take SW from and to load DB and Diag to. ip addr.
 FTP_PATH = "adva/"
 FTP_SW_PATH = FTP_PATH + "Soft/F8_"
+VERSION="3.2.1"  # default SW for upgrade
+
+
+# TODO add log browse
 
 
 # pylint: disable=global-statement, broad-except, too-many-branches, invalid-name, attribute-defined-outside-init, no-else-return
@@ -76,6 +80,7 @@ def read_args():
     parser.add_argument("-c", "--command", dest="cmd",
                         choices=("diag",
                                  "alarm",
+                                 "log",
                                  "sysinfo",
                                  "sw",
                                  "sw_load",
@@ -84,15 +89,21 @@ def read_args():
                                  "inventory",
                                  ),
                         help="optional, command to execute")
-    parser.add_argument("-V", "--version", dest="version", help="Only valid for 'sw_load', 'sw_del', version of pkg")
+    parser.add_argument("-V", "--version", dest="version", default=VERSION, help="Only valid for 'sw_load', 'sw_del', version of pkg")
     parser.add_argument("-p", "--pm", dest="pmtype", nargs="+", help="PM type to query (FEC/OSNR/power), case insensitive")
     parser.add_argument("--pmfamily", dest="pmfamily", nargs="+", help="PM type to query (QualityMod/NearEnd/Impairments)")
     parser.add_argument("-t", "--period", dest="pmperiod", help="PM period to query (1m/15m/1h/24h), case insensitive")
+    parser.add_argument("-l", "--log", dest="log_type",
+                        choices=("evt", "alm", "aud", "sec"),
+                        default="alm",
+                        help="Type of log to query (evt, alm, aud, sec"
+                        )
     parser.add_argument("--history", dest="hist_cur", action="store_true", help="history knob # not implemented")
     parser.add_argument("--step", dest="step", help="step for history (start-number-of-bin)")
     parser.add_argument("--stepdelta", dest="step_delta", default=0, help="step delta for history (end-number-of-bin)")
 
-    parser.add_argument("-w", "--width", dest='width', default=180, help="pprint width when printing results")
+    parser.add_argument("-w", "--width", dest="width", default=180, help="pprint width when printing results")
+    parser.add_argument("--raw", dest="raw", action="store_true", help="don't filter the output dict")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", help="be more verbose")
     parser.add_argument("-vv", "--debug", dest="debug", action="store_true", help="be even more verbose")
 
@@ -143,14 +154,15 @@ class AdvaGet():
            "auth": "/auth",
            "keepalie": "/auth?actn=ka",
            "sysinfo": "/mit/me/1",
-           "pms": "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",
-           "pmsn": [
+           "pms": "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",  # not used in reality
+           "pmsn": [  # not used in reality
                "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",
                "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/och/pm/crnt",
                "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/otuc2pa/pm/crnt",
                ],
            "inventory": '/col/eqh?filter={"sl":{"$exists":true},"$ancestorsIn":["/mit/me/1/eqh/sh,1"]}',  # only shelf 1. Need to check when stacked NEs will appear
            "alarm": "/mit/me/1/alm",
+           "log": "/mit/me/1/systlog/log/{TYPE}/nelogent",
            "diag": "/mit/me/1/sysdiag?actn=gendiag",
            "cpdiag": "/mit/me/1/sysdiag?actn=cpdiag",
            "sw": "/mit/me/1/eqh/shelf,1/eqh/slot,ecm-1/eq/card/card/sw/active/pkg",
@@ -966,40 +978,38 @@ async def get_data(device, args):
             hist_cur=hist_cur, step=args.step, step_delta=args.step_delta,
             iface_filter=args.iface,
     ) as adva_dev:
-        # adva_dev = AdvaGet(device,
-        #                    url,
-        #                    args.cmd,
-        #                    pmtype=pmtype,
-        #                    pmtype_exact=pmtype_exact,
-        #                    pmperiod=pmperiod,
-        #                    pmfamily=pmfamily,
-        #                    hist_cur=hist_cur, step=args.step, step_delta=args.step_delta,
-        #                    iface_filter=args.iface,
-        #                    )
-        # if not await adva_dev.open_session():
-        #     logging.error("Could not open session to %s " % adva_dev.fqdn)
-        #     return 1
-        # if args.iface:
-        #     adva_dev.gather_pms_iface(args.iface)
-        #     pprint(adva_dev.dict_out)
-        #     return 1
-        # inv_data = adva_dev.get_inventory()
-        # adva_dev.fill_inventory(inv_data)
         if not adva_dev:
             return None
         if not args.cmd:
             # not cmd given, will query PMs
             uri = "/mit/me/1/eqh/shelf,1/eqh"
-            uri = adva_dev.uri["pms"].format(SHELFNUM=1, SLOTNUM=4, PORTNUM=1)
-            uri = '/col/cur?filter={"$ancestorsIn":["/mit/me/1/eqh/shelf,1/eqh/slot,4/"]}'
-            uri = '/col/cur'
+            uri = adva_dev.uri["pms"].format(SHELFNUM=1, SLOTNUM=4, PORTNUM=1)  # humble tries
+            uri = '/col/cur?filter={"$ancestorsIn":["/mit/me/1/eqh/shelf,1/eqh/slot,4/"]}'  # humble tries
+            uri = "/col/cur"
             data = await adva_dev.query_col(uri, dict())  # here we get dict with all the PMs for all cards and ifaces
             res_data = adva_dev.parse_col(data)
         else:
             # here do the cmd
             if any(c in args.cmd for c in ("show_alarm", "alarm")):
                 _, tmp = await adva_dev.query_uri(adva_dev.uri["alarm"])
-                res_data = trim_dict(tmp, ["condescr", "ednm", "repttim"])
+                if args.raw:
+                    res_data = tmp
+                else:
+                    res_data = trim_dict(tmp, ["condescr", "ednm", "repttim"])
+            elif args.cmd == "log":
+                log_type = args.log_type
+                _, tmp = await adva_dev.query_uri(adva_dev.uri["log"].format(TYPE=log_type))
+                if args.raw:
+                    res_data = tmp
+                else:
+                    filter = ["condescr",
+                              "condtyp",
+                              "detectm",
+                              "ednm",
+                              "evttm",
+                              "descr",
+                              ]
+                    res_data = trim_dict(tmp, filter)
             elif args.cmd == "sw":
                 _, tmp = await adva_dev.query_uri(adva_dev.uri["sw"])
                 res_data = trim_dict(tmp, ["version"])
@@ -1009,7 +1019,6 @@ async def get_data(device, args):
             elif any(c in args.cmd for c in ("sysinfo", "show_sysinfo")):
                 res_data = await adva_dev.get_sysinfo()
             elif args.cmd == "sw_load":
-                sw = "3.2.1" if not args.version else args.version
                 await adva_dev.sw_load(sw)
             elif args.cmd == "sw_del":
                 sw = "2.1.2" if not args.version else args.version
@@ -1019,10 +1028,13 @@ async def get_data(device, args):
                     await adva_dev.db_load()
             elif args.cmd == "inventory":
                 _, tmp = await adva_dev.query_uri(adva_dev.uri["inventory"])
-                res_data = trim_dict(tmp,
-                                     ["fnm", "hwrev", "itemnum", "manfid", "name", "serial"],
-                                     ("snmpeqp", "sm", "sl", "plgh", "displ", "sh")
-                                     )
+                if args.raw:
+                    res_data = tmp
+                else:
+                    res_data = trim_dict(tmp,
+                                         ["fnm", "hwrev", "itemnum", "manfid", "name", "serial"],
+                                         ("snmpeqp", "sm", "sl", "plgh", "displ", "sh")
+                                         )
     # await adva_dev.logout()
     return res_data
 
