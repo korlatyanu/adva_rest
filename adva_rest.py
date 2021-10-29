@@ -1,6 +1,6 @@
 #!/usr/bin/env python3.6
 
-"""Adva  tool (REST-API)
+r"""Adva  tool (REST-API)
 examples:
 
 # query current nint QFactor from tow NEs
@@ -56,17 +56,66 @@ FTP_SW_PATH = FTP_PATH + "Soft/F8_"
 VERSION = "3.2.1"  # default SW for upgrade
 
 
-# TODO add log browse
-
-
 # pylint: disable=global-statement, broad-except, too-many-branches, invalid-name, attribute-defined-outside-init, no-else-return
 # pylint: disable=too-many-lines, too-many-instance-attributes, too-many-arguments, no-self-use, too-many-locals, too-many-public-methods
-# pylint: disable=no-value-for-parameter
+# pylint: disable=no-value-for-parameter, too-many-statements
 
 
 if not FTP_SERVER:
     if "cl" in locals():
         FTP_SERVER = cl.FTP_SERVER
+
+
+# URI value can be type  str or list
+# if type list, format:
+# uri name; keys_of_interest (list); skip_keys (list)
+URI = {
+    "login": "/auth?actn=lgin",
+    "logout": "/auth?actn=lgout",
+    "auth": "/auth",
+    "keepalive": "/auth?actn=ka",
+    "pms": "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",  # not used in reality
+    "pmsn": [  # not used in reality
+        "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",
+        "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/och/pm/crnt",
+        "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/otuc2pa/pm/crnt",
+    ],
+
+    "cpdiag": "/mit/me/1/sysdiag?actn=cpdiag",
+    "sw_req_pkgs": "/mit/me/1/swmg/relmf/relcard/",  # to get requited pkgs // doesn't work in 3.1.5, 3.2.1
+    }
+
+URI_CMD = {
+    "protect": ["/mit/me/1/eqh/shelf,1/eqh/slot,1/eq/card/prtgrp/traffic%2F1/prtunit", ["fnm", "type", "state"]],
+    "inventory": [
+        '/col/eqh?filter={"sl":{"$exists":true},"$ancestorsIn":["/mit/me/1/eqh/sh,1"]}',
+        ["fnm", "hwrev", "itemnum", "manfid", "name", "serial"],
+        ["snmpeqp", "sm", "sl", "plgh", "displ", "sh"],
+    ],
+    # only shelf 1. Need to check when stacked NEs will appear
+    "alarm": ["/mit/me/1/alm", ["condescr", "ednm", "repttim"]],
+    "log": [
+        "/mit/me/1/systlog/log/{TYPE}/nelogent",
+        [
+            "condescr",
+            "condtyp",
+            "detectm",
+            "ednm",
+            "evttm",
+            "descr",
+        ]
+    ],
+    "diag": "/mit/me/1/sysdiag?actn=gendiag",
+    "sysinfo": "/mit/me/1",
+    "sw": ["/mit/me/1/eqh/shelf,1/eqh/slot,ecm-1/eq/card/card/sw/active/pkg", ["version"]],
+    "sw_load": "/mit/me/1/swmg?actn=cppkg",
+    "sw_del": "/mit/me/1/swmg?actn=rmpkg",
+    "sw_ecm_staging": ["/mit/me/1/eqh/shelf,1/eqh/slot,ecm-1/eq/card/card/sw/staging/pkg", ["name"]],
+    "db_backup": "/mit/me/1/mgt?actn=bkcrnt",
+    "db_load": "/mit/me/1/mgt?actn=dbto",
+}
+
+URI.update(URI_CMD)
 
 
 def read_args():
@@ -79,17 +128,7 @@ def read_args():
     parser.add_argument("-r", "--read", dest="devices_file", help="read devices from file")
     parser.add_argument("-i", "--interface", dest="iface", help="by default only check 'line' ifaces. 'all' for clients")
     parser.add_argument("-c", "--command", dest="cmd",
-                        choices=("diag",
-                                 "alarm",
-                                 "log",
-                                 "sysinfo",
-                                 "sw",
-                                 "sw_load",
-                                 "sw_del",
-                                 "db_backup",
-                                 "inventory",
-                                 "protect",
-                                 ),
+                        choices=(URI_CMD.keys()),
                         help="optional, command to execute")
     parser.add_argument("-V", "--version", dest="version", default=VERSION, help="Only valid for 'sw_load', 'sw_del', version of pkg")
     parser.add_argument("-p", "--pm", dest="pmtype", nargs="+", help="PM type to query (FEC/OSNR/power), case insensitive")
@@ -98,7 +137,7 @@ def read_args():
     parser.add_argument("-l", "--log", dest="log_type",
                         choices=("evt", "alm", "aud", "sec"),
                         default="alm",
-                        help="Type of log to query (evt, alm, aud, sec"
+                        help="Type of log to query."
                         )
     parser.add_argument("--history", dest="hist_cur", action="store_true", help="history knob # not implemented")
     parser.add_argument("--step", dest="step", help="step for history (start-number-of-bin)")
@@ -116,17 +155,15 @@ def inhibit_exception(func):
     """функйия-декоратор для подавления исключений.
     Если возникло исключение, мы должны завершить сессию в NE, иначе они могут накопиться, и новые сессии нельзябудет открыть.
     """
-    def wrapped(*args, **kwargs):
+    def wrapped(*_args, **kwargs):
         logging.debug("wrapped insdide inhibit_exception got func %s ", func.__name__)
         logging.debug("wrapped insdide inhibit_exception kwargs %s ", str(**kwargs))
-        #for arg in args:
-        #    pprint(dir(arg))
         try:
-            return func(*args, **kwargs)
+            return func(*_args, **kwargs)
         except Exception as e:
             logging.error("Error %s while executing %s", e, func.__name__)
             traceback.print_exc()
-            args[0].logout()  # в нулевом аргументе сам экземпляр класса.
+            _args[0].logout()  # в нулевом аргументе сам экземпляр класса.
             #self.logout()
     return wrapped
 
@@ -151,31 +188,6 @@ class AdvaGet():
     }
     #common_header = {'Accept': 'application/json;ext=nn', 'Content-Type': 'application/json;ext=nn', 'AOS-API-Version': '1.0'}
     #
-    uri = {"login": "/auth?actn=lgin",
-           "logout": "/auth?actn=lgout",
-           "auth": "/auth",
-           "keepalie": "/auth?actn=ka",
-           "sysinfo": "/mit/me/1",
-           "pms": "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",  # not used in reality
-           "pmsn": [  # not used in reality
-               "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",
-               "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/och/pm/crnt",
-               "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/otuc2pa/pm/crnt",
-               ],
-           "protect": "/mit/me/1/eqh/shelf,1/eqh/slot,1/eq/card/prtgrp/traffic%2F1/prtunit",
-           "inventory": '/col/eqh?filter={"sl":{"$exists":true},"$ancestorsIn":["/mit/me/1/eqh/sh,1"]}',  # only shelf 1. Need to check when stacked NEs will appear
-           "alarm": "/mit/me/1/alm",
-           "log": "/mit/me/1/systlog/log/{TYPE}/nelogent",
-           "diag": "/mit/me/1/sysdiag?actn=gendiag",
-           "cpdiag": "/mit/me/1/sysdiag?actn=cpdiag",
-           "sw": "/mit/me/1/eqh/shelf,1/eqh/slot,ecm-1/eq/card/card/sw/active/pkg",
-           "sw_load": "/mit/me/1/swmg?actn=cppkg",
-           "sw_ecm_staging": "/mit/me/1/eqh/shelf,1/eqh/slot,ecm-1/eq/card/card/sw/staging/pkg",
-           "sw_req_pkgs": "/mit/me/1/swmg/relmf/relcard/",  # to get requited pkgs // doesn't work in 3.1.5, 3.2.1
-           "sw_del": "/mit/me/1/swmg?actn=rmpkg",
-           "db_backup": "/mit/me/1/mgt?actn=bkcrnt",
-           "db_load": "/mit/me/1/mgt?actn=dbto",
-           }  # probably better to keep URIs in class. TODO
 
     def __init__(self,
                  fqdn,
@@ -239,8 +251,8 @@ node 1 slot 1/psm-2
 node 1 slot 1/psm-3
 node 1 plug-slot 1/1/c1
 node 1 plug-slot 1/1/c2"""
-        #resp = self.session.get(self.url + self.uri["inventory"], headers=self.header, verify=False)
-        _, tmp = await self.query_uri(self.uri["inventory"])
+        #resp = self.session.get(self.url + URI["inventory"], headers=self.header, verify=False)
+        _, tmp = await self.query_uri(URI["inventory"])
         # print("PRINT JSON" + pformat(resp.json()))
         return tmp["result"]  # this returns a list
 
@@ -284,8 +296,8 @@ node 1 plug-slot 1/1/c2"""
         """open https session to NE"""
         logging.info("open_session started")
         self.session = aiohttp.ClientSession()
-        resp = await self.session.post(self.url + self.uri["login"], json=self.body, headers=self.header, verify_ssl=False)
-        logging.info("sent %s to %s", self.url + self.uri["login"], self.fqdn)
+        resp = await self.session.post(self.url + URI["login"], json=self.body, headers=self.header, verify_ssl=False)
+        logging.info("sent %s to %s", self.url + URI["login"], self.fqdn)
         logging.info("sent %s", self.body)
         logging.info("got %s from %s", resp.status, self.fqdn)
         if resp.status != 200:
@@ -300,16 +312,10 @@ node 1 plug-slot 1/1/c2"""
     async def logout(self):
         """Logout from NE"""
         logging.info("Sending logout %s", self.header)
-        lout = await self.session.post(self.url + self.uri["logout"], verify_ssl=False, headers=self.header)
+        lout = await self.session.post(self.url + URI["logout"], verify_ssl=False, headers=self.header)
         await self.session.close()
         logging.info("Logging out, status code %s", lout.status)
         logging.info("Logging out %s", lout.headers)
-
-    @inhibit_exception
-    async def get_sysinfo(self):
-        """get NE sysinfo"""
-        _, dict_out = await self.query_uri(self.uri["sysinfo"])
-        return dict_out
 
     @inhibit_exception
     async def derive_modulation(self, slot, port):
@@ -338,13 +344,21 @@ node 1 plug-slot 1/1/c2"""
         return resp.status
 
     @inhibit_exception
-    async def query_uri(self, uri):
-        """General Get URI query"""
+    async def query_uri(self, uri, keys_of_interest=None, skip_keys=None):
+        """General Get URI query.
+        keys_of_interest and skip_keys are used for output data filtering with trim_dict.
+        Done very messy here: uri can be a str or a list with keys_of_interest and skip_keys altogether.
+        Latter can be given as params as well. Mess..."""
+        if isinstance(uri, list):
+            if len(uri) == 3:
+                skip_keys = uri[2]
+            if len(uri) >= 2:
+                keys_of_interest = uri[1]
+            uri = uri[0]
         header = self.header
         tmp = {}
         logging.info("query_uri sending %s %s", self.url + uri, pformat(header))
         resp = await self.session.get(self.url + uri, headers=header, verify_ssl=False)
-        # pprint(resp.headers)
         if resp.status >= 200 and resp.status < 300:
             try:
                 tmp = await resp.json()
@@ -358,6 +372,8 @@ node 1 plug-slot 1/1/c2"""
             print(f"Failed to query uri '{uri}', status code {resp.status}")
         logging.debug("Code received from device: \n %s", pformat(resp.status))
         logging.debug("Raw data received from device: \n %s", pformat(tmp))
+        if not args.raw:
+            tmp = trim_dict(tmp, keys_of_interest, skip_keys)
         return resp.status, tmp
 
     @inhibit_exception
@@ -374,7 +390,7 @@ node 1 plug-slot 1/1/c2"""
         """"func needs to be redone with AIO!!!"""
         shelfnum, slotnum, portnum = self.get_port_slot(iface)
         portnum = portnum[-1]
-        for uri in self.uri["pmsn"]:
+        for uri in URI["pmsn"]:
             uri = uri.format(SHELFNUM=shelfnum, SLOTNUM=slotnum, PORTNUM=portnum, MOD="ot200")
             resp, data = self.query_uri(uri)
             if resp not in [200, 204]:
@@ -504,11 +520,10 @@ node 1 plug-slot 1/1/c2"""
     @inhibit_exception
     async def sw_staging(self):
         """Func to return current pkgs in staging"""
-        _, tmp = await self.query_uri(self.uri["sw_ecm_staging"])
-        tmp2 = trim_dict(tmp, ["name"])
-        if "result" not in tmp2:
+        _, tmp = await self.query_uri(URI["sw_ecm_staging"])
+        if "result" not in tmp:
             return ""
-        pkg_present = [pkg["name"] for pkg in tmp2["result"]]
+        pkg_present = [pkg["name"] for pkg in tmp["result"]]
         self.print("Currently ECM staging contains:")
         print(pkg_present)
         return pkg_present
@@ -518,7 +533,7 @@ node 1 plug-slot 1/1/c2"""
         pkg_present = await self.sw_staging()
         # по-хорошему нужно удалить старые имаджи
         # закачивать нужно пэкэджи для конкретных карт, нужно знать, какие карты есть в шасси.
-        # _, tmp = await self.query_uri(self.uri["sw_req_pkgs"])  # тут он выдает список для всех карт, даже которых нет в NE
+        # _, tmp = await self.query_uri(URI["sw_req_pkgs"])  # тут он выдает список для всех карт, даже которых нет в NE
         # pprint(tmp)
         # pkgs_required = {}
         # for item in tmp["result"]:
@@ -579,7 +594,7 @@ node 1 plug-slot 1/1/c2"""
                 }
             }
         }
-        code, headers, resp = await self.post_uri(self.uri["sw_load"], body)
+        code, headers, resp = await self.post_uri(URI["sw_load"], body)
         logging.info("returned %s:\n%s\n\n%s", code, pformat(headers), pformat(resp))
         if code != 202:
             self.print("Failed to copy %s cause %s" % (pkg, code), msg_type="error")
@@ -616,7 +631,7 @@ node 1 plug-slot 1/1/c2"""
                 "name": pkgs_del
             }
         }
-        code, headers, resp = await self.post_uri(self.uri["sw_del"], body)
+        code, headers, resp = await self.post_uri(URI["sw_del"], body)
         logging.info("returned %s:\n%s\n\n%s", code, pformat(headers), pformat(resp))
         if code != 200:
             self.print("Failed to delete cause %s" %code, msg_type="error")
@@ -627,7 +642,7 @@ node 1 plug-slot 1/1/c2"""
     async def gen_diag(self):
         """generate diag file"""
         body = {"in": {}}
-        code, headers, _ = await self.post_uri(self.uri["diag"], body)
+        code, headers, _ = await self.post_uri(URI["diag"], body)
         if code != 202:
             self.print("Failed to generate diag for %s %s" % (self.fqdn, code), msg_type="error")
             return False
@@ -656,7 +671,7 @@ node 1 plug-slot 1/1/c2"""
                 }
             }
         }
-        code, headers, _ = await self.post_uri(self.uri["cpdiag"], body)
+        code, headers, _ = await self.post_uri(URI["cpdiag"], body)
         if code != 202:
             self.print("Failed to copy diag for %s %s" % (self.fqdn, code), msg_type="error")
             return False
@@ -670,7 +685,7 @@ node 1 plug-slot 1/1/c2"""
     async def db_backup(self):
         """backup the DB"""
         body = {"in": {"fmt": "binary"}}
-        code, headers, _ = await self.post_uri(self.uri["db_backup"], body)
+        code, headers, _ = await self.post_uri(URI["db_backup"], body)
         if code != 202:
             self.print("Failed to backup DB %s" % code, msg_type="error")
             return False
@@ -701,7 +716,7 @@ node 1 plug-slot 1/1/c2"""
                 }
             }
         }
-        code, headers, _ = await self.post_uri(self.uri["db_load"], body)
+        code, headers, _ = await self.post_uri(URI["db_load"], body)
         if code != 202:
             self.print("Failed to upload DB for %s %s" % (self.fqdn, code), msg_type="error")
             return False
@@ -772,7 +787,7 @@ def print_inv(_list):
     return out
 
 
-def trim_dict(_dict, keys_of_interest=None, skip_keys=()):
+def trim_dict(_dict, keys_of_interest=None, skip_keys=None):
     """"This function should leave only specified keys in given dict"""
     if not keys_of_interest:
         return _dict
@@ -781,7 +796,7 @@ def trim_dict(_dict, keys_of_interest=None, skip_keys=()):
         "result",
     ]
     if not skip_keys:
-        skip_keys = ("ct")
+        skip_keys = ["ct"]
     keys_of_interest += rubbish_keys
     logging.debug("trim_dict is issued")
     for k, v in _dict.items():
@@ -910,7 +925,7 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
                ]
     elif any(p.lower() in ["opr", "power"] for p in pmtype):
         # items here might be not exact (IFAM instead of explicitly referencing each PM IFAM23Lnw, IFAM23Hnw)
-        # TODO use regexps
+        # FIXME use regexps
         # pmt = ["opr", "Power", "IFunknown", ]
         pmt = ["opr",
                "IFQFnw",
@@ -964,7 +979,7 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
     return pmt, pmt_exact, pmfamily, pmp, hc
 
 
-async def get_data(device, args):
+async def get_data(device):
     """AdvaGet entry point"""
     res_data = {}
     url = url_construct(device)
@@ -987,41 +1002,16 @@ async def get_data(device, args):
         if not args.cmd:
             # not cmd given, will query PMs
             uri = "/mit/me/1/eqh/shelf,1/eqh"
-            uri = adva_dev.uri["pms"].format(SHELFNUM=1, SLOTNUM=4, PORTNUM=1)  # humble tries
+            uri = URI["pms"].format(SHELFNUM=1, SLOTNUM=4, PORTNUM=1)  # humble tries
             uri = '/col/cur?filter={"$ancestorsIn":["/mit/me/1/eqh/shelf,1/eqh/slot,4/"]}'  # humble tries
             uri = "/col/cur"
             data = await adva_dev.query_col(uri, dict())  # here we get dict with all the PMs for all cards and ifaces
             res_data = adva_dev.parse_col(data)
         else:
             # here do the cmd
-            if any(c in args.cmd for c in ("show_alarm", "alarm")):
-                _, tmp = await adva_dev.query_uri(adva_dev.uri["alarm"])
-                if args.raw:
-                    res_data = tmp
-                else:
-                    res_data = trim_dict(tmp, ["condescr", "ednm", "repttim"])
-            elif args.cmd == "log":
-                log_type = args.log_type
-                _, tmp = await adva_dev.query_uri(adva_dev.uri["log"].format(TYPE=log_type))
-                if args.raw:
-                    res_data = tmp
-                else:
-                    filter = ["condescr",
-                              "condtyp",
-                              "detectm",
-                              "ednm",
-                              "evttm",
-                              "descr",
-                              ]
-                    res_data = trim_dict(tmp, filter)
-            elif args.cmd == "sw":
-                _, tmp = await adva_dev.query_uri(adva_dev.uri["sw"])
-                res_data = trim_dict(tmp, ["version"])
-            elif any(c in args.cmd for c in ("diag", "gen_diag")):
+            if args.cmd == "diag":
                 if await adva_dev.gen_diag():
                     await adva_dev.copy_diag()
-            elif any(c in args.cmd for c in ("sysinfo", "show_sysinfo")):
-                res_data = await adva_dev.get_sysinfo()
             elif args.cmd == "sw_load":
                 sw = VERSION if not args.version else args.version
                 await adva_dev.sw_load(sw)
@@ -1031,30 +1021,10 @@ async def get_data(device, args):
             elif args.cmd == "db_backup":
                 if await adva_dev.db_backup():
                     await adva_dev.db_load()
-            elif args.cmd == "inventory":
-                _, tmp = await adva_dev.query_uri(adva_dev.uri["inventory"])
-                if args.raw:
-                    res_data = tmp
-                else:
-                    res_data = trim_dict(tmp,
-                                         ["fnm", "hwrev", "itemnum", "manfid", "name", "serial"],
-                                         ("snmpeqp", "sm", "sl", "plgh", "displ", "sh")
-                                         )
             else:
-                _, res_data = await adva_dev.query_uri(adva_dev.uri[args.cmd])
-
-    # await adva_dev.logout()
+                # here we call the uri
+                _, res_data = await adva_dev.query_uri(URI[args.cmd])
     return res_data
-
-    #for item in sorted(data.keys()):
-        #print(item)
-    #    print(convert_entity(item))
-    # pprint(data)
-    # try:
-    #     Adva_dev.gather_pms()
-    # except BaseException as err:
-    #     logging.error("Exception has occured %s " % err)
-    #     traceback.print_tb(err.__traceback__)
 
 
 def get_devices_from_file(_file):
@@ -1070,7 +1040,6 @@ def get_devices_from_file(_file):
 
 def main():
     """script entry point"""
-    args = read_args()
     global MULTITASK
     global WIDTH
     WIDTH = int(args.width)
@@ -1085,7 +1054,7 @@ def main():
         logging.basicConfig(format=frmt, level=logging.ERROR)
     if args.device:
         device = prepare_device(args.device)
-        data = asyncio.get_event_loop().run_until_complete(get_data(device, args))
+        data = asyncio.get_event_loop().run_until_complete(get_data(device))
         results[device] = data
     elif args.devices:
         devices = prepare_devices(args.devices)
@@ -1106,7 +1075,7 @@ def main():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         for device in devices:
-            tasks.append(loop.create_task(get_data(device, args)))
+            tasks.append(loop.create_task(get_data(device)))
         try:
             res = loop.run_until_complete(asyncio.gather(*tasks))
         except Exception as e:
@@ -1123,4 +1092,6 @@ def main():
 
 
 if __name__ == '__main__':
+    args = read_args()
+    URI_CMD["log"][0] = URI_CMD["log"][0].format(TYPE=args.log_type)
     main()
