@@ -8,6 +8,7 @@ adva_rest.py -dd dwdm-m9-sas1-1-new dwdm-sas1-m9-1-new -t now -p qf
 
 # check SW on all NEs
 adva_rest.py -a -c sw
+adva_rest.py -a -c sw | perl -pe "s/\*\n/\* /g" | grep 2.2.1
 
 # generate Diag.tgz and copy it to remote server
 adva_rest.py -d dwdm-adva-test -c diag
@@ -52,7 +53,7 @@ PASSWORD = ""  # put password here. Can be put in environments, 'DWDM_PASSW'
 FTP_SERVER = ""  # FTP to take SW from and to load DB and Diag to. ip addr.
 FTP_PATH = "adva/"
 FTP_SW_PATH = FTP_PATH + "Soft/F8_"
-VERSION="3.2.1"  # default SW for upgrade
+VERSION = "3.2.1"  # default SW for upgrade
 
 
 # TODO add log browse
@@ -87,6 +88,7 @@ def read_args():
                                  "sw_del",
                                  "db_backup",
                                  "inventory",
+                                 "protect",
                                  ),
                         help="optional, command to execute")
     parser.add_argument("-V", "--version", dest="version", default=VERSION, help="Only valid for 'sw_load', 'sw_del', version of pkg")
@@ -160,6 +162,7 @@ class AdvaGet():
                "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/och/pm/crnt",
                "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/otuc2pa/pm/crnt",
                ],
+           "protect": "/mit/me/1/eqh/shelf,1/eqh/slot,1/eq/card/prtgrp/traffic%2F1/prtunit",
            "inventory": '/col/eqh?filter={"sl":{"$exists":true},"$ancestorsIn":["/mit/me/1/eqh/sh,1"]}',  # only shelf 1. Need to check when stacked NEs will appear
            "alarm": "/mit/me/1/alm",
            "log": "/mit/me/1/systlog/log/{TYPE}/nelogent",
@@ -906,6 +909,8 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
                "QualityTF400g16Q",
                ]
     elif any(p.lower() in ["opr", "power"] for p in pmtype):
+        # items here might be not exact (IFAM instead of explicitly referencing each PM IFAM23Lnw, IFAM23Hnw)
+        # TODO use regexps
         # pmt = ["opr", "Power", "IFunknown", ]
         pmt = ["opr",
                "IFQFnw",
@@ -921,7 +926,6 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
                "IF112gLR4",
                "IFunknown",
                "OSC",
-               "IFAM23Hnw",
                "IFAM23Hnw",
                "IFAM23Lvar1nw",
                ]
@@ -1019,6 +1023,7 @@ async def get_data(device, args):
             elif any(c in args.cmd for c in ("sysinfo", "show_sysinfo")):
                 res_data = await adva_dev.get_sysinfo()
             elif args.cmd == "sw_load":
+                sw = VERSION if not args.version else args.version
                 await adva_dev.sw_load(sw)
             elif args.cmd == "sw_del":
                 sw = "2.1.2" if not args.version else args.version
@@ -1035,6 +1040,9 @@ async def get_data(device, args):
                                          ["fnm", "hwrev", "itemnum", "manfid", "name", "serial"],
                                          ("snmpeqp", "sm", "sl", "plgh", "displ", "sh")
                                          )
+            else:
+                _, res_data = await adva_dev.query_uri(adva_dev.uri[args.cmd])
+
     # await adva_dev.logout()
     return res_data
 
