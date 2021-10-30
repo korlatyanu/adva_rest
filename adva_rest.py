@@ -27,7 +27,6 @@ adva_rest.py -a -c db_backup
 import asyncio
 import argparse
 import logging
-import traceback
 import re
 import os
 import json
@@ -74,12 +73,11 @@ URI = {
     "logout": "/auth?actn=lgout",
     "auth": "/auth",
     "keepalive": "/auth?actn=ka",
-    "pms": "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",  # not used in reality
-    "pmsn": [  # not used in reality
-        "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",
-        "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/och/pm/crnt",
-        "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/otuc2pa/pm/crnt",
-    ],
+    # "pmsn": [  # not used in reality. It's difficult to use, as need to know all the layers of entity.
+    #     "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/opt/pm/crnt",
+    #     "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/och/pm/crnt",
+    #     "/mit/me/1/eqh/shelf,{SHELFNUM}/eqh/slot,{SLOTNUM}/eq/card/ptp/nw,{PORTNUM}/ctp/{MOD}/otuc2pa/pm/crnt",
+    # ],
 
     "cpdiag": "/mit/me/1/sysdiag?actn=cpdiag",
     "sw_req_pkgs": "/mit/me/1/swmg/relmf/relcard/",  # to get requited pkgs // doesn't work in 3.1.5, 3.2.1
@@ -113,6 +111,10 @@ URI_CMD = {
     "sw_ecm_staging": ["/mit/me/1/eqh/shelf,1/eqh/slot,ecm-1/eq/card/card/sw/staging/pkg", ["name"]],
     "db_backup": "/mit/me/1/mgt?actn=bkcrnt",
     "db_load": "/mit/me/1/mgt?actn=dbto",
+    "time": "/mit/me/1/datm/tim",
+    "license": ["/mit/me/1/lmsys/lm", ["avail", "name", "grntd", "used"], ["fmprfid"]],
+    "shelf": "/mit/me/1/eqh/shelf,1",
+    # "pm": ["/mit/me/1/eqh/shelf,{SHELF}/eqh/slot,{SLOT}/eq/card/ptp/nw,{PORT}/opt/pm/crnt"],  # do not use it
 }
 
 URI.update(URI_CMD)
@@ -139,33 +141,15 @@ def read_args():
                         default="alm",
                         help="Type of log to query."
                         )
-    parser.add_argument("--history", dest="hist_cur", action="store_true", help="history knob # not implemented")
-    parser.add_argument("--step", dest="step", help="step for history (start-number-of-bin)")
-    parser.add_argument("--stepdelta", dest="step_delta", default=0, help="step delta for history (end-number-of-bin)")
-
+    parser.add_argument("--history", dest="hist_cur", action="store_true", help="history knob")
+    parser.add_argument("--step", dest="step", help="step for history. How many bins back needed")
+    parser.add_argument("--stepdelta", dest="step_delta", default=0, help="step delta for history // not implemented. not needed even")
     parser.add_argument("-w", "--width", dest="width", default=180, help="pprint width when printing results")
     parser.add_argument("--raw", dest="raw", action="store_true", help="don't filter the output dict")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", help="be more verbose")
     parser.add_argument("-vv", "--debug", dest="debug", action="store_true", help="be even more verbose")
 
     return parser.parse_args()
-
-
-def inhibit_exception(func):
-    """функйия-декоратор для подавления исключений.
-    Если возникло исключение, мы должны завершить сессию в NE, иначе они могут накопиться, и новые сессии нельзябудет открыть.
-    """
-    def wrapped(*_args, **kwargs):
-        logging.debug("wrapped insdide inhibit_exception got func %s ", func.__name__)
-        logging.debug("wrapped insdide inhibit_exception kwargs %s ", str(**kwargs))
-        try:
-            return func(*_args, **kwargs)
-        except Exception as e:
-            logging.error("Error %s while executing %s", e, func.__name__)
-            traceback.print_exc()
-            _args[0].logout()  # в нулевом аргументе сам экземпляр класса.
-            #self.logout()
-    return wrapped
 
 
 class AdvaGet():
@@ -224,7 +208,6 @@ class AdvaGet():
         logging.debug("Body is: %s", self.body)
         logging.debug("AdvaGet class values: %s", self.__dict__)
 
-    @inhibit_exception
     async def get_inventory(self):
         """Function will query inventory info from device and fill the info about installed cards
             returnes the list from result
@@ -256,7 +239,6 @@ node 1 plug-slot 1/1/c2"""
         # print("PRINT JSON" + pformat(resp.json()))
         return tmp["result"]  # this returns a list
 
-    @inhibit_exception
     async def fill_inventory(self, inv_json):
         """"takes json data with inventory, creates inventory entries in object
         inv_json returned from device query consists of a list of cards
@@ -271,17 +253,6 @@ node 1 plug-slot 1/1/c2"""
                 slot = v["dnm"]
                 self.cards[slot] = v["name"]
         return None
-
-    def get_port_slot(self, iface):
-        """Parse iface name"""
-        port_re = re.compile((r"""(?P<shelf>\d)/(?P<slot>[\d\w]+)/(?P<port>[\d\w]+)"""
-                              r"""(/(?P<logic>[\w\d]+)(/(?P<sub_logic>[\w\d-]+))?)?"""))
-        m = port_re.match(iface)
-        if not m:
-            logging.error("get_port_slot got improper iface!")
-            return None, None, None
-        logging.info("get_port_slot matches %s ", pformat(m))
-        return m["shelf"], m["slot"], m["port"]
 
     async def __aenter__(self):
         """open session upon creating Class object with 'with'"""
@@ -317,7 +288,6 @@ node 1 plug-slot 1/1/c2"""
         logging.info("Logging out, status code %s", lout.status)
         logging.info("Logging out %s", lout.headers)
 
-    @inhibit_exception
     async def derive_modulation(self, slot, port):
         """this should guess the modulation type of the N port. Makes it dumbly trying to query config with ot200 first.
         If error, goes with ot100
@@ -334,7 +304,6 @@ node 1 plug-slot 1/1/c2"""
                 return mod
         return "unknown"
 
-    @inhibit_exception
     async def query_port_config(self, uri):
         """this needs to be redone"""
         header = self.header
@@ -343,7 +312,6 @@ node 1 plug-slot 1/1/c2"""
         logging.debug("Raw data received from device: \n %s", pformat(resp.json()))
         return resp.status
 
-    @inhibit_exception
     async def query_uri(self, uri, keys_of_interest=None, skip_keys=None):
         """General Get URI query.
         keys_of_interest and skip_keys are used for output data filtering with trim_dict.
@@ -376,7 +344,6 @@ node 1 plug-slot 1/1/c2"""
             tmp = trim_dict(tmp, keys_of_interest, skip_keys)
         return resp.status, tmp
 
-    @inhibit_exception
     async def post_uri(self, uri, body):
         """General Post URI query"""
         header = self.header
@@ -385,24 +352,22 @@ node 1 plug-slot 1/1/c2"""
         tmp = await resp.json()
         return resp.status, resp.headers, tmp
 
-    @inhibit_exception
-    def gather_pms_iface(self, iface):
-        """"func needs to be redone with AIO!!!"""
-        shelfnum, slotnum, portnum = self.get_port_slot(iface)
-        portnum = portnum[-1]
-        for uri in URI["pmsn"]:
-            uri = uri.format(SHELFNUM=shelfnum, SLOTNUM=slotnum, PORTNUM=portnum, MOD="ot200")
-            resp, data = self.query_uri(uri)
-            if resp not in [200, 204]:
-                return 1
-            pms_data = self.pick_pms(data["result"])
-            if iface not in self.dict_out:
-                self.dict_out[iface] = pms_data
-            else:
-                self.dict_out[iface].update(pms_data)
-        return 0
+    def get_uri(self, data):
+        """we get the data from '/col' URI, it contains all ther resource addresses in '/mit' hierarchy"""
+        uri = set()
+        for mit in data:
+            port, _, _, _ = convert_entity(mit)
+            if not port:
+                continue
+            if self.iface and self.iface not in port:
+                logging.debug("skipped uri due port %s not match from args %s: %s", port, self.iface, mit)
+                continue
+            if "/pm" not in mit:
+                continue
+            uri.add(mit.split("/pm/")[0] + "/pm/")
+        logging.debug("URIs chosen for further query:\n%s", pformat(uri))
+        return uri
 
-    @inhibit_exception
     async def query_col(self, uri, out_data):
         """recursively query PMs from NE"""
         _, data = await self.query_uri(uri)
@@ -417,7 +382,6 @@ node 1 plug-slot 1/1/c2"""
             await self.query_col(uri, out_data)
         return out_data
 
-    @inhibit_exception
     def parse_col(self, data):
         """walk through data received from 'col' request. Write to result dict"""
         #dict_out = defaultdict(defaultdict(dict).copy)  # iface: {logical_iface: pmtype: [pmperiods]}
@@ -437,6 +401,8 @@ node 1 plug-slot 1/1/c2"""
         #  'sts': 'prtl'},
         keys_of_interest = (
             #"bintv",
+            "stime",
+            "idx",  # number of bin for hsistory PM
             "pmdata",
             #"self",
             #"dnm",
@@ -491,14 +457,26 @@ node 1 plug-slot 1/1/c2"""
                 logging.debug("dropped %s due pmfamily", port)
                 continue
             logging.debug("left %s %s for further processing", port, key)
-            for data_key, data_value in data_.items():
-                if data_key not in keys_of_interest:
+            add_data = {}
+            for key_of_interest in keys_of_interest:
+                if key_of_interest == "idx":
+                    tmp = data_.get(key_of_interest, None)
+                    if self.step:
+                        if int(tmp) > int(self.step) - 1:
+                            # go to next item
+                            break
                     continue
-                #dict_out[port][port_logical][pmtype].update(data_value)
+                tmp = data_.get(key_of_interest, None)
+                if not tmp:
+                    continue
+                if isinstance(tmp, str):
+                    # not pmdata here
+                    add_data[key_of_interest] = tmp
+                    continue
                 for merge_pm, merge_pms in merge_pmtype.items():
                     if pmtype in merge_pms:
                         pmtype = merge_pm
-                for end_pmtype, end_value in data_value.items():
+                for end_pmtype, end_value in tmp.items():  # iterate over pmdata
                     #print(self.pmtype_exact, end_pmtype)
                     if self.pmtype_exact and end_pmtype not in self.pmtype_exact:
                         logging.info("dropped %s %s due exact PM not match", end_pmtype, end_value)
@@ -515,9 +493,10 @@ node 1 plug-slot 1/1/c2"""
                         dict_out[port][port_logical][pmtype][pmperiod][end_pmtype] = {}
                     # dict_out[port][port_logical][pmtype][pmperiod].update({data_key: data_value})
                     dict_out[port][port_logical][pmtype][pmperiod][end_pmtype] = end_value  # we basically keep only pmdata
+                    if add_data:
+                        dict_out[port][port_logical][pmtype].update(add_data)
         return dict_out
 
-    @inhibit_exception
     async def sw_staging(self):
         """Func to return current pkgs in staging"""
         _, tmp = await self.query_uri(URI["sw_ecm_staging"])
@@ -578,7 +557,6 @@ node 1 plug-slot 1/1/c2"""
             self.print("now copying %s" % pkg)
             await self.sw_load_pkg(version, pkg)
 
-    @inhibit_exception
     async def sw_load_pkg(self, version, pkg):
         """"download the pkg file"""
         path = FTP_SW_PATH + f"{version}/"
@@ -602,7 +580,6 @@ node 1 plug-slot 1/1/c2"""
         job = headers["Location"] + "/ajob"
         await self.poll_ajob(job, "copy %s" % pkg)
 
-    @inhibit_exception
     async def poll_ajob(self, ajob, name):
         """wait in cycle for async job to finish"""
         while True:
@@ -617,7 +594,6 @@ node 1 plug-slot 1/1/c2"""
                 return False
             sleep(10)
 
-    @inhibit_exception
     async def sw_del(self, version):
         """delete given version pkgs from staging"""
         pkgs_present = await self.sw_staging()
@@ -638,7 +614,6 @@ node 1 plug-slot 1/1/c2"""
         else:
             self.print("succesfully deleted pkgs", msg_type="finished")
 
-    @inhibit_exception
     async def gen_diag(self):
         """generate diag file"""
         body = {"in": {}}
@@ -649,7 +624,6 @@ node 1 plug-slot 1/1/c2"""
         job = headers["Location"] + "/ajob"
         return bool(await self.poll_ajob(job, "generate diag"))
 
-    @inhibit_exception
     async def copy_diag(self,
                         prot="ftp",
                         srvtype="ipAddress",
@@ -681,7 +655,6 @@ node 1 plug-slot 1/1/c2"""
         else:
             return False
 
-    @inhibit_exception
     async def db_backup(self):
         """backup the DB"""
         body = {"in": {"fmt": "binary"}}
@@ -692,7 +665,6 @@ node 1 plug-slot 1/1/c2"""
         job = headers["Location"] + "/ajob"
         return bool(await self.poll_ajob(job, "backup DB"))
 
-    @inhibit_exception
     async def db_load(
             self,
             prot="ftp",
@@ -758,7 +730,6 @@ node 1 plug-slot 1/1/c2"""
                         dict_out[pm] = pmv
         return dict_out
 
-    #@inhibit_exception
     def print(self, *argv, msg_type="regular"):
         """"print with device name"""
         if isinstance(*argv, str):
@@ -785,6 +756,18 @@ def print_inv(_list):
             out += " name: " + v["name"]
         out += "\n"
     return out
+
+
+def get_port_slot(iface):
+    """Parse iface name"""
+    port_re = re.compile((r"""(?P<shelf>\d)/(?P<slot>[\d\w]+)/(?P<port>[\d\w]+)"""
+                          r"""(/(?P<logic>[\w\d]+)(/(?P<sub_logic>[\w\d-]+))?)?"""))
+    m = port_re.match(iface)
+    if not m:
+        logging.error("get_port_slot got improper iface!")
+        return None, None, None
+    logging.info("get_port_slot matches %s, shelf='%s', slot='%s', port='%s'", pformat(m), m["shelf"], m["slot"], m["port"])
+    return m["shelf"], m["slot"], m["port"]
 
 
 def trim_dict(_dict, keys_of_interest=None, skip_keys=None):
@@ -979,6 +962,11 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
     return pmt, pmt_exact, pmfamily, pmp, hc
 
 
+def prepare_uri():
+    """Func will prepare the parametrized URIs"""
+    URI_CMD["log"][0] = URI_CMD["log"][0].format(TYPE=args.log_type)
+
+
 async def get_data(device):
     """AdvaGet entry point"""
     res_data = {}
@@ -986,6 +974,7 @@ async def get_data(device):
     pmtype, pmtype_exact, pmfamily, pmperiod, hist_cur = prepare_pms_arg(args.pmtype, args.pmperiod, args.hist_cur)
     if not pmfamily:
         pmfamily = args.pmfamily
+    prepare_uri()
     async with AdvaGet(
             device,
             url,
@@ -1000,12 +989,23 @@ async def get_data(device):
         if not adva_dev:
             return None
         if not args.cmd:
-            # not cmd given, will query PMs
+            # no cmd given, will query PMs
             uri = "/mit/me/1/eqh/shelf,1/eqh"
-            uri = URI["pms"].format(SHELFNUM=1, SLOTNUM=4, PORTNUM=1)  # humble tries
+            # uri = URI["pms"].format(SHELFNUM=1, SLOTNUM=4, PORTNUM=1)  # humble tries
             uri = '/col/cur?filter={"$ancestorsIn":["/mit/me/1/eqh/shelf,1/eqh/slot,4/"]}'  # humble tries
             uri = "/col/cur"
+            # uri = "/mit/me/1/eqh/shelf,1/eqh/slot,2/eq/card/ptp/nw,2/ctp/ot500/otsia/otsi/1/pm/hist"
+            # uri = "/mit/me/1/eqh/shelf,1/eqh/slot,1/eq/card/ptp/nw,2/ctp/ot500/otuc5pa/pm/hist"
             data = await adva_dev.query_col(uri, dict())  # here we get dict with all the PMs for all cards and ifaces
+            if args.hist_cur:
+                # to query history PM we need to query specific resoorce (port, logical layer).
+                # we can query current PMs all at once via '/col' URI. From there we can derive the resources (ports, etc) to later query
+                # the hisroy PM for those resources.
+                uri_resources = adva_dev.get_uri(data)
+                data = {}
+                for uri in uri_resources:
+                    tmp = await adva_dev.query_col(uri + "hist", dict())
+                    data.update(tmp)
             res_data = adva_dev.parse_col(data)
         else:
             # here do the cmd
@@ -1093,5 +1093,4 @@ def main():
 
 if __name__ == '__main__':
     args = read_args()
-    URI_CMD["log"][0] = URI_CMD["log"][0].format(TYPE=args.log_type)
     main()
