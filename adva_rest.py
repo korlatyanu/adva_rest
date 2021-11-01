@@ -141,6 +141,7 @@ def read_args():
                         default="alm",
                         help="Type of log to query."
                         )
+    parser.add_argument("--uri", dest="uri", help="URI to query (only get URIs supported)")
     parser.add_argument("--history", dest="hist_cur", action="store_true", help="history knob")
     parser.add_argument("--step", dest="step", help="step for history. How many bins back needed")
     parser.add_argument("--stepdelta", dest="step_delta", default=0, help="step delta for history // not implemented. not needed even")
@@ -988,7 +989,7 @@ async def get_data(device):
     ) as adva_dev:
         if not adva_dev:
             return None
-        if not args.cmd:
+        if not args.cmd and not args.uri:
             # no cmd given, will query PMs
             uri = "/mit/me/1/eqh/shelf,1/eqh"
             # uri = URI["pms"].format(SHELFNUM=1, SLOTNUM=4, PORTNUM=1)  # humble tries
@@ -1007,6 +1008,9 @@ async def get_data(device):
                     tmp = await adva_dev.query_col(uri + "hist", dict())
                     data.update(tmp)
             res_data = adva_dev.parse_col(data)
+        elif args.uri:
+            # we gave particular URI to query in script args.
+            _, res_data = await adva_dev.query_uri(args.uri)
         else:
             # here do the cmd
             if args.cmd == "diag":
