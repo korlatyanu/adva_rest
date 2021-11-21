@@ -35,6 +35,7 @@ from pprint import pprint, pformat
 from time import sleep
 from datetime import date
 from collections import defaultdict
+from tabulate import tabulate
 
 import colorama
 import aiohttp
@@ -95,13 +96,16 @@ URI_CMD = {  # Maybe need to make a class out of it
     "log": [
         "/mit/me/1/systlog/log/{TYPE}/nelogent",
         [
-            "condescr",
-            "condtyp",
-            "detectm",
+            # "condescr",
+            # "condtyp",
+            # "detectm",
             "ednm",
             "evttm",
             "descr",
-        ]
+            "host",
+            "mgmtp",
+        ],
+        ["almi", ]
     ],
     "diag": "/mit/me/1/sysdiag?actn=gendiag",
     "sysinfo": "/mit/me/1",
@@ -773,6 +777,19 @@ def uri_transform(uri):
 
 def parse_log(data):
     """given 'log' data, make it human-readable"""
+    tab = []
+    for item in data["result"]:
+        line = []
+        descr = ""
+        line.append(item["evttm"])  # 'evttm': '2018-01-05T02:50:21.1338Z'
+        line.append(item["ednm"].replace("node 1 ", ""))  # 'node 1 interface 1/ecm-1/m/eth ety'
+        descr = item["descr"]  # 'descr': 'TCA unavailable seconds payload high'
+        if "usri" in item:
+            descr += "proto: " + item["usri"]["mgmtp"] + " from " + item["usri"]["host"]
+        line.append(descr)
+        tab.append(line)
+    return tabulate(tab)
+
 
 
 def get_port_slot(iface):
@@ -1056,8 +1073,11 @@ async def get_data(device):
                 # here we call the uri
                 uri, keys_of_interest, skip_keys = uri_transform(URI[args.cmd])
                 _, res_data = await adva_dev.query_uri(uri)
-                if keys_of_interest or skip_keys:
+                if not args.raw and (keys_of_interest or skip_keys):
                     res_data = trim_dict(res_data, keys_of_interest=keys_of_interest, skip_keys=skip_keys)
+                if not args.raw and args.cmd == "log":
+                    # we have dedicated parser for 'log'. TODO add parser to URI
+                    res_data = parse_log(res_data)
     return res_data
 
 
@@ -1121,7 +1141,10 @@ def main():
             logging.info("Device %s returns None", device)
             continue
         print(f"*** {device} ***")
-        pprint(res, width=WIDTH)
+        if isinstance(res, str):
+            print(res)
+        else:
+            pprint(res, width=WIDTH)
         print("\n")
 
 
