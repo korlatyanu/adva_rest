@@ -357,10 +357,11 @@ node 1 plug-slot 1/1/c2"""
         """we get the data from '/col' URI, it contains all ther resource addresses in '/mit' hierarchy"""
         uri = set()
         for mit in data:
-            port, _, _, _ = convert_entity(mit)
+            port, port_logical, _, _ = convert_entity(mit)
             if not port:
                 continue
-            if self.iface and self.iface not in port:
+            port += "/" + port_logical
+            if self.iface and not re.findall(self.iface, port):
                 logging.debug("skipped uri due port %s not match from args %s: %s", port, self.iface, mit)
                 continue
             if "/pm" not in mit:
@@ -444,7 +445,7 @@ node 1 plug-slot 1/1/c2"""
             if self.pmtype and not any(pm in key for pm in self.pmtype) and "all" not in self.pmtype:
                 logging.debug("dropped %s %s due pmtype", port, key)
                 continue
-            if self.iface and not self.iface in port:
+            if self.iface and not re.findall(self.iface, port + "/" + port_logical):
                 logging.debug("dropped %s %s due iface", port, key)
                 continue
             if not port or any(not_interesting_port in port for not_interesting_port in not_interesting_ports):
@@ -968,6 +969,14 @@ def prepare_uri():
     URI_CMD["log"][0] = URI_CMD["log"][0].format(TYPE=args.log_type)
 
 
+def string_to_re(string):
+    """convert given string to regex pattern"""
+    string = re.sub("\*", ".*", string)  # swapp asterisk with re .*. If given string was already in re format, will duplitcate "."
+    string = re.sub("\.+\*", ".*", string)  # eliminate previous
+    string = ".*" + string + ".*"  # match anything in the begining and end of string
+    return string
+
+
 async def get_data(device):
     """AdvaGet entry point"""
     res_data = {}
@@ -976,6 +985,9 @@ async def get_data(device):
     if not pmfamily:
         pmfamily = args.pmfamily
     prepare_uri()
+    iface_filter = None
+    if args.iface:
+        iface_filter = string_to_re(args.iface)
     async with AdvaGet(
             device,
             url,
@@ -985,7 +997,7 @@ async def get_data(device):
             pmperiod=pmperiod,
             pmfamily=pmfamily,
             hist_cur=hist_cur, step=args.step, step_delta=args.step_delta,
-            iface_filter=args.iface,
+            iface_filter=iface_filter,
     ) as adva_dev:
         if not adva_dev:
             return None
