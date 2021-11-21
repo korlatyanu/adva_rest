@@ -83,7 +83,7 @@ URI = {
     "sw_req_pkgs": "/mit/me/1/swmg/relmf/relcard/",  # to get requited pkgs // doesn't work in 3.1.5, 3.2.1
     }
 
-URI_CMD = {
+URI_CMD = {  # Maybe need to make a class out of it
     "protect": ["/mit/me/1/eqh/shelf,1/eqh/slot,1/eq/card/prtgrp/traffic%2F1/prtunit", ["fnm", "type", "state"]],
     "inventory": [
         '/col/eqh?filter={"sl":{"$exists":true},"$ancestorsIn":["/mit/me/1/eqh/sh,1"]}',
@@ -313,22 +313,13 @@ node 1 plug-slot 1/1/c2"""
         logging.debug("Raw data received from device: \n %s", pformat(resp.json()))
         return resp.status
 
-    async def query_uri(self, uri, keys_of_interest=None, skip_keys=None):
-        """General Get URI query.
-        keys_of_interest and skip_keys are used for output data filtering with trim_dict.
-        Done very messy here: uri can be a str or a list with keys_of_interest and skip_keys altogether.
-        Latter can be given as params as well. Mess..."""
-        if isinstance(uri, list):
-            if len(uri) == 3:
-                skip_keys = uri[2]
-            if len(uri) >= 2:
-                keys_of_interest = uri[1]
-            uri = uri[0]
+    async def query_uri_terminal(self, uri):
+        """Terminal URI query. Probably not what you need"""
         header = self.header
         tmp = {}
         logging.info("query_uri sending %s %s", self.url + uri, pformat(header))
         resp = await self.session.get(self.url + uri, headers=header, verify_ssl=False)
-        if resp.status >= 200 and resp.status < 300:
+        if 200 <= resp.status < 300:
             try:
                 tmp = await resp.json()
             except json.decoder.JSONDecodeError:
@@ -338,12 +329,29 @@ node 1 plug-slot 1/1/c2"""
                 txt = re.sub(r"(e-\d+)\.0+", r"\1", txt)
                 tmp = json.loads(txt)
         else:
-            print(f"Failed to query uri '{uri}', status code {resp.status}")
-        logging.debug("Code received from device: \n %s", pformat(resp.status))
-        logging.debug("Raw data received from device: \n %s", pformat(tmp))
-        if not args.raw:
-            tmp = trim_dict(tmp, keys_of_interest, skip_keys)
+            logging.error("%s: Failed to query uri '%s', status code %s", self.fqdn, uri, resp.status)
+        logging.debug("Code received from %s: \n %s", self.fqdn, pformat(resp.status))
+        logging.debug("Raw data received from %s: \n %s", self.fqdn, pformat(tmp))
+        if "next" in tmp:
+            logging.warning("%s 'next' key is present in json data for uri %s", self.fqdn, uri)
         return resp.status, tmp
+
+    async def query_uri(self, uri, out_data=None):
+        """General URI query. If output is big, there will be few chunks, 'next' points to URI with next chunk."""
+        status, data = await self.query_uri_terminal(uri)
+        if not out_data:
+            out_data = dict()
+            out_data["result"] = list()
+        if not data:
+            return status, out_data
+        if "next" not in data:
+            return status, data
+        out_data["result"] += data["result"]
+        if "next" in data:
+            logging.warning("next uri: \n %s", pformat(data["next"]))
+            uri = data["next"]
+            await self.query_uri(uri, out_data=out_data)
+        return status, out_data
 
     async def post_uri(self, uri, body):
         """General Post URI query"""
@@ -354,7 +362,7 @@ node 1 plug-slot 1/1/c2"""
         return resp.status, resp.headers, tmp
 
     def get_uri(self, data):
-        """we get the data from '/col' URI, it contains all ther resource addresses in '/mit' hierarchy"""
+        """Generate set of URIs. we get the data from '/col' URI, it contains all the resource addresses in '/mit' hierarchy"""
         uri = set()
         for mit in data:
             port, port_logical, _, _ = convert_entity(mit)
@@ -370,24 +378,12 @@ node 1 plug-slot 1/1/c2"""
         logging.debug("URIs chosen for further query:\n%s", pformat(uri))
         return uri
 
-    async def query_col(self, uri, out_data):
-        """recursively query PMs from NE"""
-        _, data = await self.query_uri(uri)
-        if not data:
-            return out_data
-        for item in data["result"]:
-            logging.debug("query_col collected: \n %s", pformat(item["self"]))
-            out_data[item["self"]] = item
-        if "next" in data:
-            logging.debug("query_col next uri: \n %s", pformat(data["next"]))
-            uri = data["next"]
-            await self.query_col(uri, out_data)
-        return out_data
 
     def parse_col(self, data):
         """walk through data received from 'col' request. Write to result dict"""
         #dict_out = defaultdict(defaultdict(dict).copy)  # iface: {logical_iface: pmtype: [pmperiods]}
         dict_out = {}  # iface: {logical_iface: pmtype: [pmperiods]}
+        # example data:
         # {'bintv': 'm15',
         #  'ctyp': '/cim/mm/moc/pm,cur',
         #  'dnm': 'm15-Power',
@@ -437,7 +433,9 @@ node 1 plug-slot 1/1/c2"""
         logging.debug("parse_col issued with PMtype %s, PMperiod %s: \n ", self.pmtype, self.pmperiod)
         # sometimes it's usefull to check what device gives in REST:
         # adva_rest.py -d dwdm-man-kiv-e -vv 2>&1 | i "'self': '/mit/me/"
-        for key, data_ in data.items():
+        for item in data["result"]:
+            key = item["self"]
+            data_ = item
             port, port_logical, pmperiod, pmtype = convert_entity(key)
             if self.pmperiod and not self.pmperiod in key and "all" not in self.pmperiod:
                 logging.debug("dropped %s due pmperiod", port)
@@ -760,6 +758,23 @@ def print_inv(_list):
     return out
 
 
+def uri_transform(uri):
+    """sometimes URI is a string, sometimes it's a collection"""
+    keys_of_interest = []
+    skip_keys = []
+    if isinstance(uri, list):
+        if len(uri) == 3:
+            skip_keys = uri[2]
+        if len(uri) >= 2:
+            keys_of_interest = uri[1]
+        uri = uri[0]
+    return uri, keys_of_interest, skip_keys
+
+
+def parse_log(data):
+    """given 'log' data, make it human-readable"""
+
+
 def get_port_slot(iface):
     """Parse iface name"""
     port_re = re.compile((r"""(?P<shelf>\d)/(?P<slot>[\d\w]+)/(?P<port>[\d\w]+)"""
@@ -971,8 +986,8 @@ def prepare_uri():
 
 def string_to_re(string):
     """convert given string to regex pattern"""
-    string = re.sub("\*", ".*", string)  # swapp asterisk with re .*. If given string was already in re format, will duplitcate "."
-    string = re.sub("\.+\*", ".*", string)  # eliminate previous
+    string = re.sub(r"\*", ".*", string)  # swapp asterisk with re .*. If given string was already in re format, will duplitcate "."
+    string = re.sub(r"\.+\*", ".*", string)  # eliminate previous
     string = ".*" + string + ".*"  # match anything in the begining and end of string
     return string
 
@@ -1009,15 +1024,15 @@ async def get_data(device):
             uri = "/col/cur"
             # uri = "/mit/me/1/eqh/shelf,1/eqh/slot,2/eq/card/ptp/nw,2/ctp/ot500/otsia/otsi/1/pm/hist"
             # uri = "/mit/me/1/eqh/shelf,1/eqh/slot,1/eq/card/ptp/nw,2/ctp/ot500/otuc5pa/pm/hist"
-            data = await adva_dev.query_col(uri, dict())  # here we get dict with all the PMs for all cards and ifaces
+            _, data = await adva_dev.query_uri(uri)  # here we get dict with all the PMs for all cards and ifaces
             if args.hist_cur:
-                # to query history PM we need to query specific resoorce (port, logical layer).
+                # to query history PM we need to query specific resource (port, logical layer).
                 # we can query current PMs all at once via '/col' URI. From there we can derive the resources (ports, etc) to later query
                 # the hisroy PM for those resources.
                 uri_resources = adva_dev.get_uri(data)
                 data = {}
                 for uri in uri_resources:
-                    tmp = await adva_dev.query_col(uri + "hist", dict())
+                    _, tmp = await adva_dev.query_uri(uri + "hist")
                     data.update(tmp)
             res_data = adva_dev.parse_col(data)
         elif args.uri:
@@ -1039,7 +1054,10 @@ async def get_data(device):
                     await adva_dev.db_load()
             else:
                 # here we call the uri
-                _, res_data = await adva_dev.query_uri(URI[args.cmd])
+                uri, keys_of_interest, skip_keys = uri_transform(URI[args.cmd])
+                _, res_data = await adva_dev.query_uri(uri)
+                if keys_of_interest or skip_keys:
+                    res_data = trim_dict(res_data, keys_of_interest=keys_of_interest, skip_keys=skip_keys)
     return res_data
 
 
