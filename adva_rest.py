@@ -348,8 +348,8 @@ node 1 plug-slot 1/1/c2"""
             out_data["result"] = list()
         if not data:
             return status, out_data
-        if "next" not in data:
-            return status, data
+        # if "next" not in data:
+        #     return status, data
         out_data["result"] += data["result"]
         if "next" in data:
             logging.warning("next uri: \n %s", pformat(data["next"]))
@@ -434,33 +434,41 @@ node 1 plug-slot 1/1/c2"""
             "cem",
             "ecm-",
         )
-        logging.debug("parse_col issued with PMtype %s, PMperiod %s: \n ", self.pmtype, self.pmperiod)
+        logging.debug("%s parse_col issued with PMtype %s, PMperiod %s: \n ", self.fqdn, self.pmtype, self.pmperiod)
         # sometimes it's usefull to check what device gives in REST:
         # adva_rest.py -d dwdm-man-kiv-e -vv 2>&1 | i "'self': '/mit/me/"
         for item in data["result"]:
             key = item["self"]
             data_ = item
             port, port_logical, pmperiod, pmtype = convert_entity(key)
+            logging.debug("%s: processing item '%s', port: '%s', port_logical: %s, pmperiod: %s, pmtype: %s",
+                          self.fqdn,
+                          item,
+                          port,
+                          pmperiod,
+                          pmperiod,
+                          pmtype,
+                          )
             if self.pmperiod and not self.pmperiod in key and "all" not in self.pmperiod:
-                logging.debug("dropped %s due pmperiod", port)
+                logging.debug("%s: dropped %s due pmperiod '%s' vs '%s'", self.fqdn, port, pmperiod, self.pmperiod)
                 continue
             if self.pmtype and not any(pm in key for pm in self.pmtype) and "all" not in self.pmtype:
-                logging.debug("dropped %s %s due pmtype", port, key)
+                logging.debug("%s: dropped %s %s due pmtype '%s' vs '%s'", self.fqdn, port, key, pmtype, self.pmtype)
                 continue
             if self.iface and not re.findall(self.iface, port + "/" + port_logical):
-                logging.debug("dropped %s %s due iface", port, key)
+                logging.debug("%s: dropped %s %s due iface '%s' vs '%s'", self.fqdn, port, key, port + "/" + port_logical, self.iface)
                 continue
             if not port or any(not_interesting_port in port for not_interesting_port in not_interesting_ports):
                 # в общем /col данные по всем шелфам-картам-портам, нам не все интересно
-                logging.debug("dropped %s %s due port not interesting", port, key)
+                logging.debug("%s: dropped %s %s due port not interesting", self.fqdn, port, key)
                 continue
             if pmtype in not_interesting_keys:
-                logging.debug("dropped %s %s due key not interersting", port, key)
+                logging.debug("%s: dropped %s %s due key not interersting", self.fqdn, port, key)
                 continue
             if self.pmfamily and not any(pm in key for pm in self.pmfamily):
-                logging.debug("dropped %s due pmfamily", port)
+                logging.debug("%s: dropped %s due pmfamily '%s' vs ''%s", self.fqdn, port, key, pformat(self.pmfamily))
                 continue
-            logging.debug("left %s %s for further processing", port, key)
+            logging.debug("%s: left %s %s for further processing", self.fqdn, port, key)
             add_data = {}
             for key_of_interest in keys_of_interest:
                 if key_of_interest == "idx":
@@ -483,7 +491,7 @@ node 1 plug-slot 1/1/c2"""
                 for end_pmtype, end_value in tmp.items():  # iterate over pmdata
                     #print(self.pmtype_exact, end_pmtype)
                     if self.pmtype_exact and end_pmtype not in self.pmtype_exact:
-                        logging.info("dropped %s %s due exact PM not match", end_pmtype, end_value)
+                        logging.info("%s: dropped %s %s due exact PM not match '%s'", self.fqdn, end_pmtype, end_value, self.pmtype_exact)
                         continue
                     if port not in dict_out:
                         dict_out[port] = {}
@@ -776,15 +784,18 @@ def uri_transform(uri):
 
 
 def parse_log(data):
-    """given 'log' data, make it human-readable"""
+    """given 'log' data, make it human-readable. Used for 'alarm' as well"""
     tab = []
     for item in data["result"]:
         line = []
         descr = ""
-        line.append(item["evttm"])  # 'evttm': '2018-01-05T02:50:21.1338Z'
+        line.append(item.get("evttm", ""))  # 'evttm': '2018-01-05T02:50:21.1338Z'
+        line.append(item.get("repttim", ""))  # alarm time for 'alarm'
         line.append(item["ednm"].replace("node 1 ", ""))  # 'node 1 interface 1/ecm-1/m/eth ety'
-        descr = item["descr"]  # 'descr': 'TCA unavailable seconds payload high'
+        descr = item.get("descr", "")  # 'descr': 'TCA unavailable seconds payload high'
+        descr += item.get("condescr", "")  # 'descr': 'TCA unavailable seconds payload high'; for 'alarm'
         if "usri" in item:
+            # this is for 'sec' log
             descr += "proto: " + item["usri"]["mgmtp"] + " from " + item["usri"]["host"]
         line.append(descr)
         tab.append(line)
@@ -903,7 +914,7 @@ def convert_entity(str_):
                    r"(?P<pmperiod>nint|m15|day),(?P<pmtype>.+)$"
                    ), str_)  # https://regex101.com/r/FdWqmN/1/
     if not m:
-        # currently only ifaces PMs are gathered. Meybe need to gather CPU from ECM as well.
+        # currently only ifaces PMs are gathered. Maybe need to gather CPU from ECM as well.
         logging.debug("%s hasn't match", str_)
         return "", "", "", ""
     shelf, slot, port_type, port_num, logic = m.group("shelf"), m.group("slot"), m.group("port_type"), m.group("port"), m.group("port_logic")
@@ -1073,10 +1084,14 @@ async def get_data(device):
                 # here we call the uri
                 uri, keys_of_interest, skip_keys = uri_transform(URI[args.cmd])
                 _, res_data = await adva_dev.query_uri(uri)
+                if args.raw:
+                    return res_data
                 if not args.raw and (keys_of_interest or skip_keys):
                     res_data = trim_dict(res_data, keys_of_interest=keys_of_interest, skip_keys=skip_keys)
-                if not args.raw and args.cmd == "log":
+                if args.cmd == "log":
                     # we have dedicated parser for 'log'. TODO add parser to URI
+                    res_data = parse_log(res_data)
+                if args.cmd == "alarm":
                     res_data = parse_log(res_data)
     return res_data
 
