@@ -153,8 +153,10 @@ def read_args():
     parser.add_argument("--raw", dest="raw", action="store_true", help="don't filter the output dict")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", help="be more verbose")
     parser.add_argument("-vv", "--debug", dest="debug", action="store_true", help="be even more verbose")
-
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.version == "4.1.1":
+        args.version = "4.1.1-1"  # they've encoded another capability to sw name. "-1" means not service impact.
+    return args
 
 
 class AdvaGet():
@@ -240,8 +242,8 @@ node 1 slot 1/psm-3
 node 1 plug-slot 1/1/c1
 node 1 plug-slot 1/1/c2"""
         #resp = self.session.get(self.url + URI["inventory"], headers=self.header, verify=False)
-        _, tmp = await self.query_uri(URI["inventory"])
-        # print("PRINT JSON" + pformat(resp.json()))
+        uri, _, _ = uri_transform(URI["inventory"])
+        _, tmp = await self.query_uri(uri)
         return tmp["result"]  # this returns a list
 
     async def fill_inventory(self, inv_json):
@@ -249,7 +251,8 @@ node 1 plug-slot 1/1/c2"""
         inv_json returned from device query consists of a list of cards
         """
         # shelf is index 0. Cards have the same number as in chassis even if some are not intsalled. THIS is not true
-        logging.info("fill_inventory gets \n%s ", str(print_inv(inv_json)))
+        logging.info("fill_inventory gets \n%s ", pformat(inv_json))
+
         for _, v in enumerate(inv_json):
             if "type" in v and v["type"] == "slot":
                 if not "name" in v:
@@ -348,8 +351,9 @@ node 1 plug-slot 1/1/c2"""
             out_data["result"] = list()
         if not data:
             return status, out_data
-        # if "next" not in data:
-        #     return status, data
+        if "result" not in data:
+            # if there will be data without 'result' but with 'next', we will miss further chunks here
+            return status, data
         out_data["result"] += data["result"]
         if "next" in data:
             logging.warning("next uri: \n %s", pformat(data["next"]))
@@ -511,7 +515,7 @@ node 1 plug-slot 1/1/c2"""
 
     async def sw_staging(self):
         """Func to return current pkgs in staging"""
-        _, tmp = await self.query_uri(URI["sw_ecm_staging"])
+        _, tmp = await self.query_uri(URI["sw_ecm_staging"][0])
         if "result" not in tmp:
             return ""
         pkg_present = [pkg["name"] for pkg in tmp["result"]]
