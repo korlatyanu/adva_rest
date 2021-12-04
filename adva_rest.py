@@ -16,11 +16,18 @@ adva_rest.py -d dwdm-adva-test -c diag
 # load SW to device
 adva_rest.py -d dwdm-adva-test -c sw_load -V 3.2.1
 
+# upgrade SW (sw_load -> sw_install -> sw_activate)
+# use at your own risk!!!
+adva_rest.py -d dwdm-adva-test -c sw_upgrade
+
 # delete SW from device
 adva_rest.py -d dwdm-adva-test -c sw_del -V 3.2.1
 
 # backup DB from all devices
 adva_rest.py -a -c db_backup
+
+# check alarms, rm some noisy lines
+adva_rest.py -a -c alarm | grep -v "interface\|plug\|License expires"
 
 """
 
@@ -46,6 +53,7 @@ except ImportError:
     pass
 
 ENCODING = "utf-8"
+TIMEOUT = 5  # aiohttp session timeout
 MULTITASK = False
 WIDTH = 180
 LOGIN = "admin"  # put login here
@@ -82,9 +90,11 @@ URI = {
 
     "cpdiag": "/mit/me/1/sysdiag?actn=cpdiag",
     "sw_req_pkgs": "/mit/me/1/swmg/relmf/relcard/",  # to get requited pkgs // doesn't work in 3.1.5, 3.2.1
-    }
+    "db_load": "/mit/me/1/mgt?actn=dbto",
+}
 
 URI_CMD = {  # Maybe need to make a class out of it
+    # here are URIs that can be called via '-c' arg
     "protect": ["/mit/me/1/eqh/shelf,1/eqh/slot,1/eq/card/prtgrp/traffic%2F1/prtunit", ["fnm", "type", "state"]],
     "inventory": [
         '/col/eqh?filter={"sl":{"$exists":true},"$ancestorsIn":["/mit/me/1/eqh/sh,1"]}',
@@ -113,8 +123,9 @@ URI_CMD = {  # Maybe need to make a class out of it
     "sw_load": "/mit/me/1/swmg?actn=cppkg",
     "sw_del": "/mit/me/1/swmg?actn=rmpkg",
     "sw_ecm_staging": ["/mit/me/1/eqh/shelf,1/eqh/slot,ecm-1/eq/card/card/sw/staging/pkg", ["name"]],
+    "sw_install": "/mit/me/1/swmg?actn=instl",
+    "sw_activate": "/mit/me/1/swmg?actn=actv",
     "db_backup": "/mit/me/1/mgt?actn=bkcrnt",
-    "db_load": "/mit/me/1/mgt?actn=dbto",
     "time": "/mit/me/1/datm/tim",
     "license": ["/mit/me/1/lmsys/lm", ["avail", "name", "grntd", "used"], ["fmprfid"]],
     "shelf": "/mit/me/1/eqh/shelf,1",
@@ -134,7 +145,7 @@ def read_args():
     parser.add_argument("-r", "--read", dest="devices_file", help="read devices from file")
     parser.add_argument("-i", "--interface", dest="iface", help="by default only check 'line' ifaces. 'all' for clients")
     parser.add_argument("-c", "--command", dest="cmd",
-                        choices=(URI_CMD.keys()),
+                        choices=(*URI_CMD.keys(), "sw_upgrade", "lldp"),
                         help="optional, command to execute")
     parser.add_argument("-V", "--version", dest="version", default=VERSION, help="Only valid for 'sw_load', 'sw_del', version of pkg")
     parser.add_argument("-p", "--pm", dest="pmtype", nargs="+", help="PM type to query (FEC/OSNR/power), case insensitive")
@@ -154,8 +165,8 @@ def read_args():
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", help="be more verbose")
     parser.add_argument("-vv", "--debug", dest="debug", action="store_true", help="be even more verbose")
     args = parser.parse_args()
-    if args.version == "4.1.1":
-        args.version = "4.1.1-1"  # they've encoded another capability to sw name. "-1" means not service impact.
+    if args.version.startswith("4."):
+        args.version += "-1"  # they've encoded another capability to sw name. "-1" means not service impact.
     return args
 
 
@@ -273,11 +284,17 @@ node 1 plug-slot 1/1/c2"""
 
     async def open_session(self):
         """open https session to NE"""
-        logging.info("open_session started")
-        self.session = aiohttp.ClientSession()
-        resp = await self.session.post(self.url + URI["login"], json=self.body, headers=self.header, verify_ssl=False)
+        logging.info("%s: open_session started", self.fqdn)
+        try:
+            timeout = aiohttp.ClientTimeout(connect=TIMEOUT)
+            # if some host is unreachable, it'll take tiiime before showing results for reachable nodes. So timeout.
+            self.session = aiohttp.ClientSession(timeout=timeout)
+            resp = await self.session.post(self.url + URI["login"], json=self.body, headers=self.header, verify_ssl=False, )
+        except Exception as e:
+            logging.error("%s: %s", self.fqdn, e)
+            return False
         logging.info("sent %s to %s", self.url + URI["login"], self.fqdn)
-        logging.info("sent %s", self.body)
+        logging.info("%s: auth with username %s", self.fqdn, self.body["in"]["un"])
         logging.info("got %s from %s", resp.status, self.fqdn)
         if resp.status != 200:
             logging.error("Failed to open session to %s, return code %s", self.fqdn, resp.status)
@@ -290,11 +307,15 @@ node 1 plug-slot 1/1/c2"""
 
     async def logout(self):
         """Logout from NE"""
-        logging.info("Sending logout %s", self.header)
-        lout = await self.session.post(self.url + URI["logout"], verify_ssl=False, headers=self.header)
+        if "X-Auth-Token" not in self.header:
+            logging.info("%s seems we're not logged in, so will not logout, just close the session", self.fqdn)
+            await self.session.close()
+            return None
+        logging.info("%s: sending logout %s", self.fqdn, self.header)
+        # lout = await self.session.post(self.url + URI["logout"], verify_ssl=False, headers=self.header)
+        code = await self.general_post_uri(URI["logout"], body={})
         await self.session.close()
-        logging.info("Logging out, status code %s", lout.status)
-        logging.info("Logging out %s", lout.headers)
+        logging.info("%s logging out, status code %s", self.fqdn, code)
 
     async def derive_modulation(self, slot, port):
         """this should guess the modulation type of the N port. Makes it dumbly trying to query config with ot200 first.
@@ -324,7 +345,7 @@ node 1 plug-slot 1/1/c2"""
         """Terminal URI query. Probably not what you need"""
         header = self.header
         tmp = {}
-        logging.info("query_uri sending %s %s", self.url + uri, pformat(header))
+        logging.info("sending %s %s", self.url + uri, pformat(header))
         resp = await self.session.get(self.url + uri, headers=header, verify_ssl=False)
         if 200 <= resp.status < 300:
             try:
@@ -364,25 +385,49 @@ node 1 plug-slot 1/1/c2"""
     async def post_uri(self, uri, body):
         """General Post URI query"""
         header = self.header
-        logging.info("sending %s %s", self.url + uri, pformat(header))
-        resp = await self.session.post(self.url + uri, json=body, headers=header, verify_ssl=False)
-        tmp = await resp.json()
-        return resp.status, resp.headers, tmp
+        logging.info("sending %s\n%s,\nbody: %s", self.url + uri, pformat(header), pformat(body))
+        try:
+            resp = await self.session.post(self.url + uri, json=body, headers=header, verify_ssl=False)
+            tmp = await resp.json()
+            return resp.status, resp.headers, tmp
+        except Exception as e:
+            logging.error("%s: %s", self.fqdn, e)
+            return 0, {}, {}
 
-    def get_uri(self, data):
+    async def general_post_uri(self, uri, body):
+        """general POST URI func"""
+        code, headers, _ = await self.post_uri(uri, body)
+        if 200 < code > 300:
+            self.print("Failed to POST URI %s" % code, msg_type="error")
+            return False
+        job = headers.get("Location", "")  # sw_activate will not have it
+        if not job:
+            # here it's probably sw_activate
+            return True
+        job += "/ajob"
+        if await self.poll_ajob(job, uri):
+            self.print("Job finished %s" % uri, msg_type="finished")
+            return True
+
+    def derive_uri(self, data):
         """Generate set of URIs. we get the data from '/col' URI, it contains all the resource addresses in '/mit' hierarchy"""
         uri = set()
-        for mit in data:
-            port, port_logical, _, _ = convert_entity(mit)
+        if "result" not in data:
+            logging.error("%s no result in data")
+            return uri()
+        for mit in data["result"]:
+            self_ = mit.get("self", "")
+            port, port_logical, _, _ = convert_entity(self_)
             if not port:
+                logging.debug("%s: entry skipped due not port, %s, '%s'", self.fqdn, port, self_)
                 continue
             port += "/" + port_logical
             if self.iface and not re.findall(self.iface, port):
-                logging.debug("skipped uri due port %s not match from args %s: %s", port, self.iface, mit)
+                logging.debug("%s: skipped uri due port %s not match from args %s: %s", self.fqdn, port, self.iface, self_)
                 continue
-            if "/pm" not in mit:
+            if "/pm" not in self_:
                 continue
-            uri.add(mit.split("/pm/")[0] + "/pm/")
+            uri.add(self_.split("/pm/")[0] + "/pm/")
         logging.debug("URIs chosen for further query:\n%s", pformat(uri))
         return uri
 
@@ -572,6 +617,8 @@ node 1 plug-slot 1/1/c2"""
                 continue
             self.print("now copying %s" % pkg)
             await self.sw_load_pkg(version, pkg)
+        pkg_present = await self.sw_staging()
+        return all(pkg in pkg_present for pkg in pkgs_needed)
 
     async def sw_load_pkg(self, version, pkg):
         """"download the pkg file"""
@@ -596,19 +643,36 @@ node 1 plug-slot 1/1/c2"""
         job = headers["Location"] + "/ajob"
         await self.poll_ajob(job, "copy %s" % pkg)
 
+    async def sw_activate(self):
+        """"download the pkg file"""
+        body = {
+            "in": {
+                "actparam": {
+                    "valtmren": False,
+                    "now": True,
+                    "valtmr": 30,
+                }
+            }
+        }
+        yes = input(f"{self.fqdn}: this will activate SW on device, access will be lost during reboot. Are you sure? Y/n: ")
+        if re.findall(r"^[yY]+", yes):
+            self.print("system will reboot")
+            await self.general_post_uri(URI["sw_activate"], body)
+
     async def poll_ajob(self, ajob, name):
         """wait in cycle for async job to finish"""
         while True:
             _, tmp = await self.query_uri(ajob)
             self.print(tmp["descr"])
             self.print((tmp["st"], "waiting..."))
+            descr = tmp.get("descr", "") + " " + name
             if tmp["st"] == "fin":
-                self.print("finished %s at %s" % (name, self.fqdn), msg_type="finished")
+                self.print("finished %s" % descr, msg_type="finished")
                 return True
             if tmp["st"] == "fail":
-                self.print("failed to perform %s at %s" % (name, self.fqdn), msg_type="error")
+                self.print("failed to perform %s" % descr, msg_type="error")
                 return False
-            sleep(10)
+            sleep(10)  # this is intentionnaly not asyncio
 
     async def sw_del(self, version):
         """delete given version pkgs from staging"""
@@ -704,6 +768,7 @@ node 1 plug-slot 1/1/c2"""
                 }
             }
         }
+        # TODO use general_post_uri for all such funcs instead of bottom
         code, headers, _ = await self.post_uri(URI["db_load"], body)
         if code != 202:
             self.print("Failed to upload DB for %s %s" % (self.fqdn, code), msg_type="error")
@@ -711,6 +776,7 @@ node 1 plug-slot 1/1/c2"""
         job = headers["Location"] + "/ajob"
         if await self.poll_ajob(job, "copy DB to remote"):
             self.print("DB file saved to %s %s" % (srvipaddr, "/tftpboot/" + file), msg_type="finished")
+
 
     def pick_pms(self, data):
         """
@@ -758,9 +824,7 @@ node 1 plug-slot 1/1/c2"""
             color = colorama.Fore.GREEN
         else:
             color = colorama.Fore.WHITE
-        print(color, end="")
-        print(f"{self.fqdn}: " + string)
-        print(colorama.Style.RESET_ALL, end="")
+        print(color, f"{self.fqdn}: " + string, colorama.Style.RESET_ALL)
 
 
 def print_inv(_list):
@@ -790,6 +854,10 @@ def uri_transform(uri):
 def parse_log(data):
     """given 'log' data, make it human-readable. Used for 'alarm' as well"""
     tab = []
+    if "result" not in data:
+        # if no alarms, device will return  {'result': []}
+        # trim_dict will return {} in this case.
+        return "nothing to show"
     for item in data["result"]:
         line = []
         descr = ""
@@ -806,9 +874,23 @@ def parse_log(data):
     return tabulate(tab)
 
 
+def parse_lldp(data):
+    """pretty print for LLDP neighbors data"""
+    tab = []
+    for port, port_data in data.items():
+        if not port_data:
+            # some ports don't have lldp enabled or lldp neigbors
+            continue
+        line = []
+        line.append(port)
+        for item in port_data["result"]:
+            lldp_entry = " ".join((item.get("snam", ""), item.get("pid", "")))
+            line.append(lldp_entry)
+        tab.append(line)
+    return tabulate(tab)
 
 def get_port_slot(iface):
-    """Parse iface name"""
+    """Parse iface name. Not used as of now"""
     port_re = re.compile((r"""(?P<shelf>\d)/(?P<slot>[\d\w]+)/(?P<port>[\d\w]+)"""
                           r"""(/(?P<logic>[\w\d]+)(/(?P<sub_logic>[\w\d-]+))?)?"""))
     m = port_re.match(iface)
@@ -881,7 +963,7 @@ def prepare_devices(devices):
     or as devices list
     """
     rg = re.compile(r".*\d.*")
-    if rg.match(devices[0]) or any("dwdm" in dev for dev in devices):
+    if rg.match(devices[0]) or any("dwdm" in dev for dev in devices) or "-" in devices[0]:
         # есть цифры в списке, значит задан список устройств
         return [prepare_device(device) for device in devices]
     else:
@@ -993,8 +1075,9 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
         else:
             pmfamily = pmtype
     if not pmperiod:
-        if "err" in pmt:
+        if "err" in pmt or hist_cur:
             # err PMs are present only in m15, day period
+            # history PMs need be m15 and day
             pmp = "all"
         else:
             # other PMs we probably want current value
@@ -1009,6 +1092,17 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
         pmp = "day"
     logging.info("prepare_pms_arg returns type: %s; exact_type: %s; period: %s; hist/cur: %s", pmt, pmt_exact, pmp, hc)
     return pmt, pmt_exact, pmfamily, pmp, hc
+
+
+def derive_lldp_uri(data):
+    """we get PM uris from adva_dev.derive_uri, need to pick only C port mac resources and append the lldp URI tail"""
+    uri = []
+    for item in data:
+        if "mac" not in item:
+            continue
+
+        uri.append(item.rstrip("/pm/") + "/lldpport/lldpbrid/nearest/rmtnode")
+    return uri
 
 
 def prepare_uri():
@@ -1061,32 +1155,62 @@ async def get_data(device):
                 # to query history PM we need to query specific resource (port, logical layer).
                 # we can query current PMs all at once via '/col' URI. From there we can derive the resources (ports, etc) to later query
                 # the hisroy PM for those resources.
-                uri_resources = adva_dev.get_uri(data)
+                uri_resources = adva_dev.derive_uri(data)
                 data = {}
                 for uri in uri_resources:
                     _, tmp = await adva_dev.query_uri(uri + "hist")
-                    data.update(tmp)
+                    if not data:
+                        data = tmp
+                    else:
+                        data["result"] += tmp["result"]
             res_data = adva_dev.parse_col(data)
         elif args.uri:
             # we gave particular URI to query in script args.
             _, res_data = await adva_dev.query_uri(args.uri)
         else:
             # here do the cmd
-            if args.cmd == "diag":
+            sw = VERSION if not args.version else args.version
+            body = {'in': {}}
+            if args.cmd == "lldp":
+                # here we need to collect LLDP info from all C ports. We don't know what ports are there, we derive this from /col/cur
+                # LLDP works in TF only
+                _, data = await adva_dev.query_uri("/col/cur")
+                lldp_uri_resources = derive_lldp_uri(adva_dev.derive_uri(data))
+                for uri in lldp_uri_resources:
+                    _, tmp = await adva_dev.query_uri(uri)
+                    if "result" not in tmp and "self" not in tmp["result"]:
+                        continue
+                    port, _, _, _ = convert_entity(uri.split("lldp")[0] + "pm/crnt/day,FCK")  # stupid hack for convert entity to work
+                    res_data[port] = (trim_dict(tmp, ["snam", "pid"]))
+                return parse_lldp(res_data)
+            elif args.cmd == "diag":
                 if await adva_dev.gen_diag():
                     await adva_dev.copy_diag()
             elif args.cmd == "sw_load":
-                sw = VERSION if not args.version else args.version
                 await adva_dev.sw_load(sw)
+            elif args.cmd == "sw_activate":
+                # TODO make SW upgrade that will perform sw_load->sw_install->sw_activate
+                # this will terminate the session, device will reboot (usually warm).
+                await adva_dev.sw_activate()
             elif args.cmd == "sw_del":
                 sw = "2.1.2" if not args.version else args.version
                 await adva_dev.sw_del(sw)
+            elif args.cmd == "sw_upgrade":
+                if await adva_dev.sw_load(sw):
+                    if await adva_dev.general_post_uri(URI["sw_install"], body):
+                        await adva_dev.sw_activate()  # this will terminate the session
             elif args.cmd == "db_backup":
                 if await adva_dev.db_backup():
                     await adva_dev.db_load()
             else:
                 # here we call the uri
                 uri, keys_of_interest, skip_keys = uri_transform(URI[args.cmd])
+                if "actn" in uri:
+                    # we have POST URI here
+                    logging.info("%s: will process POST URI here", adva_dev.fqdn)
+                    body = {'in': {}}  # TODO move it to URI
+                    await adva_dev.general_post_uri(uri, body)
+                    return None
                 _, res_data = await adva_dev.query_uri(uri)
                 if args.raw:
                     return res_data
