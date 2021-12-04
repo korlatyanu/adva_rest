@@ -164,10 +164,10 @@ def read_args():
     parser.add_argument("--raw", dest="raw", action="store_true", help="don't filter the output dict")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", help="be more verbose")
     parser.add_argument("-vv", "--debug", dest="debug", action="store_true", help="be even more verbose")
-    args = parser.parse_args()
-    if args.version.startswith("4."):
-        args.version += "-1"  # they've encoded another capability to sw name. "-1" means not service impact.
-    return args
+    args_ = parser.parse_args()
+    if args_.version.startswith("4."):
+        args_.version += "-1"  # they've encoded another capability to sw name. "-1" means not service impact.
+    return args_
 
 
 class AdvaGet():
@@ -414,7 +414,7 @@ node 1 plug-slot 1/1/c2"""
         uri = set()
         if "result" not in data:
             logging.error("%s no result in data")
-            return uri()
+            return uri
         for mit in data["result"]:
             self_ = mit.get("self", "")
             port, port_logical, _, _ = convert_entity(self_)
@@ -768,7 +768,7 @@ node 1 plug-slot 1/1/c2"""
                 }
             }
         }
-        # TODO use general_post_uri for all such funcs instead of bottom
+        # fixme use general_post_uri for all such funcs instead of bottom
         code, headers, _ = await self.post_uri(URI["db_load"], body)
         if code != 202:
             self.print("Failed to upload DB for %s %s" % (self.fqdn, code), msg_type="error")
