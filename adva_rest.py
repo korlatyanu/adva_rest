@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 
 r"""Adva  tool (REST-API)
 examples:
@@ -37,6 +37,7 @@ import logging
 import re
 import os
 import json
+import socket
 
 from pprint import pprint, pformat
 from time import sleep
@@ -44,8 +45,8 @@ from datetime import date
 from collections import defaultdict
 from tabulate import tabulate
 
-import colorama
 import aiohttp
+import colorama
 
 try:
     import common_lib as cl  # local lib. not accessible from public sources.
@@ -61,12 +62,13 @@ PASSWORD = ""  # put password here. Can be put in environments, 'DWDM_PASSW'
 FTP_SERVER = ""  # FTP to take SW from and to load DB and Diag to. ip addr.
 FTP_PATH = "adva/"
 FTP_SW_PATH = FTP_PATH + "Soft/F8_"
+DOMAIN = "yndx.net"  # FQDN tail
 VERSION = "3.2.1"  # default SW for upgrade
 
 
 # pylint: disable=global-statement, broad-except, too-many-branches, invalid-name, attribute-defined-outside-init, no-else-return
 # pylint: disable=too-many-lines, too-many-instance-attributes, too-many-arguments, no-self-use, too-many-locals, too-many-public-methods
-# pylint: disable=no-value-for-parameter, too-many-statements
+# pylint: disable=no-value-for-parameter, too-many-statements, consider-using-f-string
 
 
 if not FTP_SERVER:
@@ -102,20 +104,21 @@ URI_CMD = {  # Maybe need to make a class out of it
         ["snmpeqp", "sm", "sl", "plgh", "displ", "sh"],
     ],
     # only shelf 1. Need to check when stacked NEs will appear
-    "alarm": ["/mit/me/1/alm", ["condescr", "ednm", "repttim"]],
+    # "alarm": ["/mit/me/1/alm", ["condescr", "ednm", "repttim"]],
+    "alarm": "/mit/me/1/alm",  # there is dedicated parser for alarm and log
     "log": [
         "/mit/me/1/systlog/log/{TYPE}/nelogent",
-        [
-            # "condescr",
-            # "condtyp",
-            # "detectm",
-            "ednm",
-            "evttm",
-            "descr",
-            "host",
-            "mgmtp",
-        ],
-        ["almi", ]
+        # [
+        #     # "condescr",
+        #     # "condtyp",
+        #     # "detectm",
+        #     "ednm",
+        #     "evttm",
+        #     "descr",
+        #     "host",
+        #     "mgmtp",
+        # ],
+        # ["almi", ]
     ],
     "diag": "/mit/me/1/sysdiag?actn=gendiag",
     "sysinfo": "/mit/me/1",
@@ -221,7 +224,7 @@ class AdvaGet():
         self.res_out = ""
         self.dict_out = defaultdict()
         self.header = {'Accept': 'application/json;ext=nn', 'Content-Type': 'application/json;ext=nn', 'AOS-API-Version': '1.0'}
-        self.cards = dict()
+        self.cards = {}
         #self.client_ports = defaultdict(list)
         logging.debug("Body is: %s", self.body)
         logging.debug("AdvaGet class values: %s", self.__dict__)
@@ -289,7 +292,7 @@ node 1 plug-slot 1/1/c2"""
             timeout = aiohttp.ClientTimeout(connect=TIMEOUT)
             # if some host is unreachable, it'll take tiiime before showing results for reachable nodes. So timeout.
             self.session = aiohttp.ClientSession(timeout=timeout)
-            resp = await self.session.post(self.url + URI["login"], json=self.body, headers=self.header, verify_ssl=False, )
+            resp = await self.session.post(self.url + URI["login"], json=self.body, headers=self.header, ssl=False, )
         except Exception as e:
             logging.error("%s: %s", self.fqdn, e)
             return False
@@ -312,7 +315,7 @@ node 1 plug-slot 1/1/c2"""
             await self.session.close()
             return None
         logging.info("%s: sending logout %s", self.fqdn, self.header)
-        # lout = await self.session.post(self.url + URI["logout"], verify_ssl=False, headers=self.header)
+        # lout = await self.session.post(self.url + URI["logout"], ssl=False, headers=self.header)
         code = await self.general_post_uri(URI["logout"], body={})
         await self.session.close()
         logging.info("%s logging out, status code %s", self.fqdn, code)
@@ -346,7 +349,7 @@ node 1 plug-slot 1/1/c2"""
         header = self.header
         tmp = {}
         logging.info("sending %s %s", self.url + uri, pformat(header))
-        resp = await self.session.get(self.url + uri, headers=header, verify_ssl=False)
+        resp = await self.session.get(self.url + uri, headers=header, ssl=False)
         if 200 <= resp.status < 300:
             try:
                 tmp = await resp.json()
@@ -368,8 +371,8 @@ node 1 plug-slot 1/1/c2"""
         """General URI query. If output is big, there will be few chunks, 'next' points to URI with next chunk."""
         status, data = await self.query_uri_terminal(uri)
         if not out_data:
-            out_data = dict()
-            out_data["result"] = list()
+            out_data = {}
+            out_data["result"] = []
         if not data:
             return status, out_data
         if "result" not in data:
@@ -387,7 +390,7 @@ node 1 plug-slot 1/1/c2"""
         header = self.header
         logging.info("sending %s\n%s,\nbody: %s", self.url + uri, pformat(header), pformat(body))
         try:
-            resp = await self.session.post(self.url + uri, json=body, headers=header, verify_ssl=False)
+            resp = await self.session.post(self.url + uri, json=body, headers=header, ssl=False)
             tmp = await resp.json()
             return resp.status, resp.headers, tmp
         except Exception as e:
@@ -398,7 +401,7 @@ node 1 plug-slot 1/1/c2"""
         """general POST URI func"""
         code, headers, _ = await self.post_uri(uri, body)
         if 200 < code > 300:
-            self.print("Failed to POST URI %s" % code, msg_type="error")
+            self.print(f"Failed to POST URI {code}", msg_type="error")
             return False
         job = headers.get("Location", "")  # sw_activate will not have it
         if not job:
@@ -406,7 +409,7 @@ node 1 plug-slot 1/1/c2"""
             return True
         job += "/ajob"
         if await self.poll_ajob(job, uri):
-            self.print("Job finished %s" % uri, msg_type="finished")
+            self.print(f"Job finished {uri}", msg_type="finished")
             return True
 
     def derive_uri(self, data):
@@ -608,7 +611,8 @@ node 1 plug-slot 1/1/c2"""
         if any("T-CEM-2" in card for card in self.cards.values()):
             pkgs_needed.append(f"f8-cem-2-{version}-hi-arm7-32bit.tar.pak")
         pkgs_needed.append(f"f8-cc-3-{version}-hi-arm7-32bit.tar.gz.pak")  # all need CC
-        pkgs_needed.append(f"f8-os-oppm-f-base-{version}-arm7-32bit.bz2.pak")  # TMP to launch FIN TODO remove
+        if any("OPPM-F" in card for card in self.cards.values()):
+            pkgs_needed.append(f"f8-os-oppm-f-base-{version}-arm7-32bit.bz2.pak")
         self.print("\nPackages needed:")
         pprint(pkgs_needed)
         for pkg in pkgs_needed:
@@ -851,6 +855,14 @@ def uri_transform(uri):
     return uri, keys_of_interest, skip_keys
 
 
+def str_join(str1, str2, delim=", "):
+    """concatenate str1 and str2 with delim."""
+    if not str2:
+        return str1
+    if not str1:
+        return str2
+    return delim.join((str1, str2))
+
 def parse_log(data):
     """given 'log' data, make it human-readable. Used for 'alarm' as well"""
     tab = []
@@ -859,16 +871,49 @@ def parse_log(data):
         # trim_dict will return {} in this case.
         return "nothing to show"
     for item in data["result"]:
+        # pprint(item)
         line = []
-        descr = ""
         line.append(item.get("evttm", ""))  # 'evttm': '2018-01-05T02:50:21.1338Z'
         line.append(item.get("repttim", ""))  # alarm time for 'alarm'
-        line.append(item["ednm"].replace("node 1 ", ""))  # 'node 1 interface 1/ecm-1/m/eth ety'
+        line.append(item["ednm"].replace("node 1 ", "")[0:56])  # 'node 1 interface 1/ecm-1/m/eth ety', trim to N chars
         descr = item.get("descr", "")  # 'descr': 'TCA unavailable seconds payload high'
         descr += item.get("condescr", "")  # 'descr': 'TCA unavailable seconds payload high'; for 'alarm'
-        if "usri" in item:
+        if "evtinf" in item:
             # this is for 'sec' log
-            descr += "proto: " + item["usri"]["mgmtp"] + " from " + item["usri"]["host"]
+            evtinf = item["evtinf"]
+            host = ""
+            mgmtp = ""
+            if "srh" in evtinf:
+                srh = evtinf["srh"]
+                host = srh.get("host", "")
+                mgmtp = srh.get("mgmtp", "")
+            if not host:
+                host = evtinf.get("host", "")
+            if not mgmtp:
+                evtinf.get("mgmtp", "")
+            if mgmtp:
+                descr += "proto: " + mgmtp
+            if host:
+                descr += " from " + host
+            descr = str_join(descr, evtinf.get("intun", ""))  # login stored here at some entries
+            descr = str_join(descr, item.get("evtnm", ""))  # TODO redo for pretty print
+            if "pch" in evtinf:
+                # 'pch': [{'path': '/llgt', 'value': '2022-02-11T10:26:15.6871Z', 'op': 'replace'}]
+                # it's a list, but with only one item
+                pch = evtinf["pch"][0]
+                descr = str_join(descr, pch.get("path", ""))
+                descr = str_join(descr, pch.get("op", ""))
+        if "almi" in item:
+            # cl/ma/mn, nsa/sa are stored here
+            almi = item["almi"]
+        else:
+            almi = item
+        other = ""
+        other = str_join(other, almi.get("locn", ""))
+        other = str_join(other, almi.get("dirn", ""))
+        other = str_join(other, almi.get("ntfncode", ""))
+        other = str_join(other, almi.get("srvafct", ""))
+        line.append(other)
         line.append(descr)
         tab.append(line)
     return tabulate(tab)
@@ -884,7 +929,7 @@ def parse_lldp(data):
         line = []
         line.append(port)
         for item in port_data["result"]:
-            lldp_entry = " ".join((item.get("snam", ""), item.get("pid", "")))
+            lldp_entry = " ".join((item.get("snam", ""), item.get("pid", ""), item.get("pdesc", "")))
             line.append(lldp_entry)
         tab.append(line)
     return tabulate(tab)
@@ -925,7 +970,7 @@ def trim_dict(_dict, keys_of_interest=None, skip_keys=None):
         if v.__class__ in (list, tuple, set):
             if not v:
                 continue
-            dict_out[k] = list()
+            dict_out[k] = []
             for item in v:
                 if item.__class__ == dict:
                     dict_out[k].append(trim_dict(item, keys_of_interest, skip_keys))
@@ -944,17 +989,59 @@ def trim_dict(_dict, keys_of_interest=None, skip_keys=None):
 
 
 def url_construct(device):
-    """"repare URL from hostname"""
-    return f"https://{device}.yndx.net"
+    """"prepare URL from hostname. Param is device name as FQDN or IP addr"""
+    return f"https://{fqdn_transform(device)}"
+
+
+def is_valid_ipv4_address(address):
+    """check if given param is v4 addr"""
+    try:
+        socket.inet_pton(socket.AF_INET, address)
+    except AttributeError:  # no inet_pton here, sorry
+        try:
+            socket.inet_aton(address)
+        except socket.error:
+            return False
+        return address.count(".") == 3
+    except socket.error:  # not a valid address
+        return False
+    return True
+
+
+def is_valid_ipv6_address(address):
+    """check if given param is v6 addr"""
+    try:
+        socket.inet_pton(socket.AF_INET6, address)
+    except AttributeError:  # no inet_pton here, sorry
+        try:
+            socket.inet_aton(address)
+        except socket.error:
+            return False
+        return address.count(".") == 3
+    except socket.error:  # not a valid address
+        return False
+    return True
+
+
+def fqdn_transform(device):
+    """return fqdn or ip addr"""
+    if DOMAIN in device:
+        return device
+    if is_valid_ipv6_address(device) or is_valid_ipv4_address(device):
+        return device
+    return device + "." + DOMAIN
 
 
 def prepare_device(device):
     """prepare device name (append 'dwdm-' if needed)"""
     if device is None:
-        device = "dwdm-adva-test"
+        device = fqdn_transform("dwdm-adva-test")
+    if is_valid_ipv4_address(device) or is_valid_ipv6_address(device):
+        # we have an IP or IPv6 addr here
+        return device
     if "dwdm" not in device:
         device = f"dwdm-{device}"
-    return device
+    return fqdn_transform(device)
 
 
 def prepare_devices(devices):
@@ -975,7 +1062,7 @@ def prepare_devices(devices):
         for rt_device in rt_devices:
             if devices[0].lower() in rt_device:
                 if devices[1].lower() in rt_device:
-                    devices_out.append(rt_device)
+                    devices_out.append(fqdn_transform(rt_device))
         return devices_out
 
 
@@ -1023,52 +1110,53 @@ def prepare_pms_arg(pmtype, pmperiod, hist_cur):
     pmp = ""
     hc = "current" if not hist_cur else "history"
     if not pmtype:
-        pmt = ("all",)
-    elif any(p.lower() in ["fec", "ber-fec"] for p in pmtype):
-        pmt = ["fec", "FEC"]
-    elif any(p.lower() in ["snr", "osnr"] for p in pmtype):
-        pmt = ["OSNR",
-               "snr",
-               "Impairments",
-               "ImpQFnw200g",
-               "ImpQFnw100g",
-               "QualityMod",
-               "QualityTF600g32h64Q",
-               "QualityTF200g16Q",
-               "QualityTF400g16Q",
-               ]
-    elif any(p.lower() in ["opr", "power"] for p in pmtype):
-        # items here might be not exact (IFAM instead of explicitly referencing each PM IFAM23Lnw, IFAM23Hnw)
-        # FIXME use regexps
-        # pmt = ["opr", "Power", "IFunknown", ]
-        pmt = ["opr",
-               "IFQFnw",
-               "IFTFnw",
-               "Power",
-               "PwrNwOPPM",
-               "PwrClOPPM",
-               "IFAM20nw",
-               "IFAM23Lnw",
-               "IFAM23Lcl",
-               "IFAM23Hcl",
-               "IF112gSR4",
-               "IF112gLR4",
-               "IFunknown",
-               "OSC",
-               "IFAM23Hnw",
-               "IFAM23Lvar1nw",
-               ]
-    elif any(p.lower() in ["err", "errors"] for p in pmtype):
-        pmt = ["err", "NearEnd", "PCSrx", "PCStx", "MacNIrx", "MacNItx",]
-    elif any(p.lower() in ["qf", "quality", "qfq"] for p in pmtype):
-        pmt = ["qf",
-               "RxQuality",
-               "RxQFnw200g",
-               "RxQFnw100g",
-               "QualityTF",
-               ]
+        pmt = ["all",]
     else:
-        pmt = ("all",)
+        if any(p.lower() in ["fec", "ber-fec"] for p in pmtype):
+            pmt += ["fec", "FEC"]
+        if any(p.lower() in ["snr", "osnr"] for p in pmtype):
+            pmt += ["OSNR",
+                    "snr",
+                    "Impairments",
+                    "ImpQFnw200g",
+                    "ImpQFnw100g",
+                    "QualityMod",
+                    "QualityTF600g32h64Q",
+                    "QualityTF200g16Q",
+                    "QualityTF400g16Q",
+                    ]
+        if any(p.lower() in ["opr", "power"] for p in pmtype):
+            # items here might be not exact (IFAM instead of explicitly referencing each PM IFAM23Lnw, IFAM23Hnw)
+            # FIXME use regexps
+            # pmt = ["opr", "Power", "IFunknown", ]
+            pmt += ["opr",
+                    "IFQFnw",
+                    "IFTFnw",
+                    "Power",
+                    "PwrNwOPPM",
+                    "PwrClOPPM",
+                    "IFAM20nw",
+                    "IFAM23Lnw",
+                    "IFAM23Lcl",
+                    "IFAM23Hcl",
+                    "IF112gSR4",
+                    "IF112gLR4",
+                    "IFunknown",
+                    "OSC",
+                    "IFAM23Hnw",
+                    "IFAM23Lvar1nw",
+                    ]
+        if any(p.lower() in ["err", "errors"] for p in pmtype):
+            pmt += ["err", "NearEnd", "PCSrx", "PCStx", "MacNIrx", "MacNItx",]
+        if any(p.lower() in ["qf", "quality", "qfq"] for p in pmtype):
+            pmt += ["qf",
+                    "RxQuality",
+                    "RxQFnw200g",
+                    "RxQFnw100g",
+                    "QualityTF",
+                    ]
+    if not pmt:
+        pmt = ["all",]
         if any(pm.islower() for pm in pmtype):
             # end pms are currently (3.1.5 and lower) in lowercase
             pmt_exact = pmtype
@@ -1181,7 +1269,7 @@ async def get_data(device):
                     if "result" not in tmp and "self" not in tmp["result"]:
                         continue
                     port, _, _, _ = convert_entity(uri.split("lldp")[0] + "pm/crnt/day,FCK")  # stupid hack for convert entity to work
-                    res_data[port] = (trim_dict(tmp, ["snam", "pid"]))
+                    res_data[port] = (trim_dict(tmp, ["snam", "pid", "pdesc"]))
                 return parse_lldp(res_data)
             elif args.cmd == "diag":
                 if await adva_dev.gen_diag():
@@ -1227,7 +1315,7 @@ async def get_data(device):
 def get_devices_from_file(_file):
     """read device list from file"""
     devices = []
-    with open(_file) as file:
+    with open(_file, "r", encoding=ENCODING) as file:
         for line in file:
             if not line.strip() or line.startswith("#"):
                 continue
@@ -1240,9 +1328,9 @@ def main():
     global MULTITASK
     global WIDTH
     WIDTH = int(args.width)
-    frmt = u"[LINE:%(lineno)d]%(filename)s - %(funcName)s() - %(levelname)-8s [%(asctime)s]  %(message)s"
-    # frmt = u"%(asctime)s %(name)s - %(filename)s:%(lineno)d - %(funcName)s() - %(levelname)s - %(dev)s %(message)s"
-    results = dict()
+    frmt = "[LINE:%(lineno)d]%(filename)s - %(funcName)s() - %(levelname)-8s [%(asctime)s]  %(message)s"
+    # frmt = "%(asctime)s %(name)s - %(filename)s:%(lineno)d - %(funcName)s() - %(levelname)s - %(dev)s %(message)s"
+    results = {}
     if args.debug:
         logging.basicConfig(format=frmt, level=logging.DEBUG)
     elif args.verbose:
