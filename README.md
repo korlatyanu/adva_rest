@@ -1,6 +1,6 @@
 # adva_rest
 
-written by Anton Korlatyanu (korlatyanu@yandex.ru, korlatyanu@yandex-team.ru). Not a programmer in anyway (not a true DWDM engineer as well =), so don't judge hard.
+written by Anton Korlatyanu (korlatyanu@yandex-team.ru). Not a programmer in anyway (not a true DWDM engineer as well =), so don't judge hard.
 
 script is usefull for engineers working with Adva FSP3000C products (CloudConnect).
 
