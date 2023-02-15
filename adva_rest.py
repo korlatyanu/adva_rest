@@ -890,7 +890,7 @@ def parse_log(data):
             if not host:
                 host = evtinf.get("host", "")
             if not mgmtp:
-                evtinf.get("mgmtp", "")
+                mgmtp = evtinf.get("mgmtp", "")
             if mgmtp:
                 descr += "proto: " + mgmtp
             if host:
@@ -1050,10 +1050,12 @@ def prepare_devices(devices):
     or as devices list
     """
     rg = re.compile(r".*\d.*")
-    if rg.match(devices[0]) or any("dwdm" in dev for dev in devices) or "-" in devices[0]:
+    if (rg.match(devices[0]) and not ("m9" in device for device in devices))\
+            or any("dwdm" in dev for dev in devices) or "-" in devices[0]:
         # есть цифры в списке, значит задан список устройств
         return [prepare_device(device) for device in devices]
     else:
+        # TODO make it in one place, add dwdm-std-1 and similar
         # вероятно тут список локаций
         assert len(devices) == 2
         devices_out = []
@@ -1277,7 +1279,6 @@ async def get_data(device):
             elif args.cmd == "sw_load":
                 await adva_dev.sw_load(sw)
             elif args.cmd == "sw_activate":
-                # TODO make SW upgrade that will perform sw_load->sw_install->sw_activate
                 # this will terminate the session, device will reboot (usually warm).
                 await adva_dev.sw_activate()
             elif args.cmd == "sw_del":
