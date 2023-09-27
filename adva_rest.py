@@ -50,6 +50,7 @@ import colorama
 
 try:
     import common_lib as cl  # local lib. not accessible from public sources.
+    from dwdm_capacity import prepare_devices, DWDMS_RT_FLT
 except ImportError:
     pass
 
@@ -143,6 +144,8 @@ def read_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-d", "--device", dest="device", help="device name, defaults to dwdm-sas-1 if no argument given")
     parser.add_argument("-dd", "--devices", dest="devices", nargs='+', help="bunch of devices")
+    parser.add_argument("-s", "--setup", dest="setup", nargs='+', help="DWDM setup (aka sas m9)")
+    parser.add_argument("-f", "--filter", dest="filter", help="devices filter for rt")
     parser.add_argument("-a", "--all", dest="all", action="store_true",
                         help="run on all devices (taken from RT with filter '{Adva F8} and not {в оффлайн}'")
     parser.add_argument("-r", "--read", dest="devices_file", help="read devices from file")
@@ -1044,30 +1047,6 @@ def prepare_device(device):
     return fqdn_transform(device)
 
 
-def prepare_devices(devices):
-    """devices can be given as src/dst dcs
-    aka VLA M9 or SAS STD
-    or as devices list
-    """
-    rg = re.compile(r".*\d.*")
-    if (rg.match(devices[0]) and not ("m9" in device for device in devices))\
-            or any("dwdm" in dev for dev in devices) or "-" in devices[0]:
-        # есть цифры в списке, значит задан список устройств
-        return [prepare_device(device) for device in devices]
-    else:
-        # TODO make it in one place, add dwdm-std-1 and similar
-        # вероятно тут список локаций
-        assert len(devices) == 2
-        devices_out = []
-        rt_devices = cl.get_devices_from_rt("({ADVA F8} or {Adva TF}) and not {в оффлайне}")
-        logging.info("Got devices from RT: %s", pformat(rt_devices))
-        for rt_device in rt_devices:
-            if devices[0].lower() in rt_device:
-                if devices[1].lower() in rt_device:
-                    devices_out.append(fqdn_transform(rt_device))
-        return devices_out
-
-
 def convert_entity(str_):
     """given entyty from Adva NE convert it to meaninngfull data"""
     port = ""
@@ -1343,7 +1322,11 @@ def main():
         data = asyncio.get_event_loop().run_until_complete(get_data(device))
         results[device] = data
     elif args.devices:
-        devices = prepare_devices(args.devices)
+        devices = [prepare_device(device) for device in args.devices]
+        pprint(devices)
+        MULTITASK = True
+    elif args.setup:
+        devices = prepare_devices(args.devices, logging, DWDMS_RT_FLT, both_ends=True)
         pprint(devices)
         MULTITASK = True
     elif args.devices_file:
@@ -1381,5 +1364,8 @@ def main():
 
 
 if __name__ == '__main__':
+    global DWDMS_RT_FLT
     args = read_args()
+    if args.filter:
+        DWDMS_RT_FLT = args.filter
     main()
