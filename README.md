@@ -1,8 +1,8 @@
 # adva_rest
 
-written by Anton Korlatyanu (korlatyanu@yandex-team.ru). Not a programmer in anyway (not a true DWDM engineer as well =), so don't judge hard.
+written by Anton Korlatyanu (korlatyanu@yandex-team.ru).
 
-script is usefull for engineers working with Adva FSP3000C products (CloudConnect).
+script is usefull for engineers working with Adva FSP3000C products (CloudConnect, TeraFlex).
 
 Asyncio, REST-API based; can work with bunch of nodes simultaneously.
 
